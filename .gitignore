@@ -65,6 +65,10 @@ coverage.xml
 .scannerwork/
 .sonar/
 
+# Private SonarQube scripts (contain local server URLs)
+scripts/sonar*.ps1
+scripts/sonar*.sh
+
 # Distribution
 *.tar.gz
 *.whl
@@ -74,6 +78,7 @@ coverage.xml
 
 # Private docs (prompts, requirements tracking)
 .github/docs2/
+.github/docs2
 .github/copilot-instructions.md
 
 # Trivy
