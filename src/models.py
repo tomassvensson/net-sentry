@@ -29,7 +29,11 @@ class Device(Base):
     encryption: Mapped[str | None] = mapped_column(String(100), nullable=True)
     radio_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     channel: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     extra_info: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_whitelisted: Mapped[bool] = mapped_column(default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
