@@ -274,6 +274,7 @@ class TestRunScan:
         config.scan.mdns_enabled = False
         config.scan.ssdp_enabled = False
         config.scan.netbios_enabled = False
+        config.scan.ipv6_enabled = False
         run_scan(config)
 
         with get_session(engine) as session:
@@ -304,6 +305,7 @@ class TestRunScan:
         config.scan.mdns_enabled = False
         config.scan.ssdp_enabled = False
         config.scan.netbios_enabled = False
+        config.scan.ipv6_enabled = False
         run_scan(config)
 
 
@@ -769,6 +771,7 @@ class TestRunScanWithAllScanners:
         config.scan.mdns_enabled = True
         config.scan.ssdp_enabled = True
         config.scan.netbios_enabled = True
+        config.scan.ipv6_enabled = False
         run_scan(config)
 
         with get_session(engine) as session:
@@ -781,20 +784,23 @@ class TestMainEntryPoint:
 
     @patch("src.main.run_scan", side_effect=KeyboardInterrupt)
     @patch("src.main.load_config")
-    def test_keyboard_interrupt_exit_zero(self, _mock_cfg: MagicMock, _mock_scan: MagicMock) -> None:
+    def test_keyboard_interrupt_exit_zero(self, mock_cfg: MagicMock, _mock_scan: MagicMock) -> None:
+        mock_cfg.return_value.api.enabled = False
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 0
 
     @patch("src.main.run_scan", side_effect=RuntimeError("fatal"))
     @patch("src.main.load_config")
-    def test_fatal_error_exit_one(self, _mock_cfg: MagicMock, _mock_scan: MagicMock) -> None:
+    def test_fatal_error_exit_one(self, mock_cfg: MagicMock, _mock_scan: MagicMock) -> None:
+        mock_cfg.return_value.api.enabled = False
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 1
 
     @patch("src.main.run_scan")
     @patch("src.main.load_config")
-    def test_normal_exit(self, _mock_cfg: MagicMock, _mock_scan: MagicMock) -> None:
+    def test_normal_exit(self, mock_cfg: MagicMock, _mock_scan: MagicMock) -> None:
+        mock_cfg.return_value.api.enabled = False
         # Should complete without raising
         main()
