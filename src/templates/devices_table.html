@@ -1,0 +1,55 @@
+{% for item in devices %}
+<tr>
+    <td><code>{{ item.device.mac_address }}</code></td>
+    <td>
+        {% if 'wifi' in item.device.device_type %}
+        <span class="badge badge-wifi">{{ item.device.device_type }}</span>
+        {% elif 'bluetooth' in item.device.device_type %}
+        <span class="badge badge-bluetooth">{{ item.device.device_type }}</span>
+        {% elif item.device.device_type == 'ssdp' %}
+        <span class="badge badge-ssdp">{{ item.device.device_type }}</span>
+        {% elif item.device.device_type == 'mdns' %}
+        <span class="badge badge-mdns">{{ item.device.device_type }}</span>
+        {% else %}
+        <span class="badge badge-network">{{ item.device.device_type }}</span>
+        {% endif %}
+    </td>
+    <td>{{ item.device.device_name or item.device.ssid or item.device.hostname or '-' }}</td>
+    <td>{{ item.device.vendor or '-' }}</td>
+    <td>
+        {% if item.window and item.window.signal_strength_dbm is not none %}
+            {% if item.window.signal_strength_dbm > -50 %}
+            <span class="signal-good">{{ item.window.signal_strength_dbm }} dBm</span>
+            {% elif item.window.signal_strength_dbm > -70 %}
+            <span class="signal-fair">{{ item.window.signal_strength_dbm }} dBm</span>
+            {% else %}
+            <span class="signal-weak">{{ item.window.signal_strength_dbm }} dBm</span>
+            {% endif %}
+        {% else %}-{% endif %}
+    </td>
+    <td class="time-ago">
+        {% if item.window %}{{ item.window.last_seen }}{% else %}-{% endif %}
+    </td>
+    <td class="time-ago">
+        {% if item.window %}{{ item.window.first_seen }}{% else %}-{% endif %}
+    </td>
+    <td>{% if item.window %}{{ item.window.scan_count }}{% else %}-{% endif %}</td>
+</tr>
+{% endfor %}
+
+{% if pages > 1 %}
+<tr>
+    <td colspan="8">
+        <div class="pagination">
+            {% for p in range(1, pages + 1) %}
+            <button class="btn {% if p == page %}active{% endif %}"
+                    hx-get="/api/v1/devices-table?page={{ p }}"
+                    hx-target="#device-table-body"
+                    hx-swap="innerHTML">
+                {{ p }}
+            </button>
+            {% endfor %}
+        </div>
+    </td>
+</tr>
+{% endif %}

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BtWiFi Device Tracker</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --surface: #16213e;
+            --primary: #0f3460;
+            --accent: #e94560;
+            --text: #eee;
+            --text-dim: #999;
+            --success: #4caf50;
+            --warning: #ff9800;
+            --border: #2a2a4a;
+        }
+        [data-theme="light"] {
+            --bg: #f5f5f5;
+            --surface: #fff;
+            --primary: #1565c0;
+            --accent: #d32f2f;
+            --text: #222;
+            --text-dim: #666;
+            --success: #2e7d32;
+            --warning: #f57c00;
+            --border: #ddd;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+        .header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 1.4rem; }
+        .header .stats { display: flex; gap: 1.5rem; }
+        .stat {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: var(--accent);
+        }
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }
+        .controls {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .btn {
+            padding: 0.4rem 0.8rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--primary);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .btn:hover { opacity: 0.85; }
+        .container {
+            max-width: 1400px;
+            margin: 1.5rem auto;
+            padding: 0 1rem;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--surface);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        th, td {
+            padding: 0.6rem 0.8rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.85rem;
+        }
+        th {
+            background: var(--primary);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.05em;
+        }
+        tr:hover { background: rgba(255,255,255,0.03); }
+        .badge {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        .badge-wifi { background: #1565c0; color: #fff; }
+        .badge-bluetooth { background: #6a1b9a; color: #fff; }
+        .badge-network { background: #2e7d32; color: #fff; }
+        .badge-ssdp { background: #e65100; color: #fff; }
+        .badge-mdns { background: #00838f; color: #fff; }
+        .badge-netbios { background: #4527a0; color: #fff; }
+        .signal-good { color: var(--success); }
+        .signal-fair { color: var(--warning); }
+        .signal-weak { color: var(--accent); }
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+        .pagination .btn { min-width: 2rem; text-align: center; }
+        .pagination .btn.active { background: var(--accent); }
+        .time-ago { color: var(--text-dim); font-size: 0.8rem; }
+        #theme-toggle { cursor: pointer; background: none; border: none; font-size: 1.2rem; }
+        .refresh-indicator { display: none; color: var(--accent); }
+        .htmx-request .refresh-indicator { display: inline; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>BtWiFi Device Tracker</h1>
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-value">{{ total_devices }}</div>
+                <div class="stat-label">Total Devices</div>
+            </div>
+        </div>
+        <div class="controls">
+            <span class="refresh-indicator">Refreshing...</span>
+            <button class="btn" hx-get="/api/v1/devices-table?page=1" hx-target="#device-table-body" hx-swap="innerHTML">
+                Refresh
+            </button>
+            <button id="theme-toggle" onclick="toggleTheme()">🌓</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <table>
+            <thead>
+                <tr>
+                    <th>MAC Address</th>
+                    <th>Type</th>
+                    <th>Name</th>
+                    <th>Vendor</th>
+                    <th>Signal</th>
+                    <th>Last Seen</th>
+                    <th>First Seen</th>
+                    <th>Scans</th>
+                </tr>
+            </thead>
+            <tbody id="device-table-body"
+                   hx-get="/api/v1/devices-table?page=1"
+                   hx-trigger="every 30s"
+                   hx-swap="innerHTML">
+                {% for item in devices %}
+                <tr>
+                    <td><code>{{ item.device.mac_address }}</code></td>
+                    <td>
+                        {% if 'wifi' in item.device.device_type %}
+                        <span class="badge badge-wifi">{{ item.device.device_type }}</span>
+                        {% elif 'bluetooth' in item.device.device_type %}
+                        <span class="badge badge-bluetooth">{{ item.device.device_type }}</span>
+                        {% elif item.device.device_type == 'ssdp' %}
+                        <span class="badge badge-ssdp">{{ item.device.device_type }}</span>
+                        {% elif item.device.device_type == 'mdns' %}
+                        <span class="badge badge-mdns">{{ item.device.device_type }}</span>
+                        {% else %}
+                        <span class="badge badge-network">{{ item.device.device_type }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ item.device.device_name or item.device.ssid or item.device.hostname or '-' }}</td>
+                    <td>{{ item.device.vendor or '-' }}</td>
+                    <td>
+                        {% if item.window and item.window.signal_strength_dbm is not none %}
+                            {% if item.window.signal_strength_dbm > -50 %}
+                            <span class="signal-good">{{ item.window.signal_strength_dbm }} dBm</span>
+                            {% elif item.window.signal_strength_dbm > -70 %}
+                            <span class="signal-fair">{{ item.window.signal_strength_dbm }} dBm</span>
+                            {% else %}
+                            <span class="signal-weak">{{ item.window.signal_strength_dbm }} dBm</span>
+                            {% endif %}
+                        {% else %}-{% endif %}
+                    </td>
+                    <td class="time-ago">
+                        {% if item.window %}{{ item.window.last_seen }}{% else %}-{% endif %}
+                    </td>
+                    <td class="time-ago">
+                        {% if item.window %}{{ item.window.first_seen }}{% else %}-{% endif %}
+                    </td>
+                    <td>{% if item.window %}{{ item.window.scan_count }}{% else %}-{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        function toggleTheme() {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme');
+            const next = current === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', next);
+            localStorage.setItem('btwifi-theme', next);
+        }
+        // Restore saved theme
+        const saved = localStorage.getItem('btwifi-theme');
+        if (saved) document.documentElement.setAttribute('data-theme', saved);
+    </script>
+</body>
+</html>
