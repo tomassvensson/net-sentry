@@ -1,9 +1,9 @@
 """Tests for configuration module."""
 
 import os
+from unittest.mock import mock_open, patch
 
 import pytest
-from unittest.mock import mock_open, patch
 
 from src.config import (
     AlertConfig,
