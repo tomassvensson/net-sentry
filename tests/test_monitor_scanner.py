@@ -53,9 +53,7 @@ class TestScanMonitorMode:
     @patch("src.monitor_scanner._capture_frames")
     @patch("src.monitor_scanner.is_scapy_available", return_value=True)
     def test_delegates_to_capture(self, _mock_avail, mock_capture) -> None:
-        mock_capture.return_value = [
-            MonitorModeDevice(mac_address="AA:BB:CC:DD:EE:FF", frame_type="beacon")
-        ]
+        mock_capture.return_value = [MonitorModeDevice(mac_address="AA:BB:CC:DD:EE:FF", frame_type="beacon")]
         result = scan_monitor_mode(interface="wlan0mon", duration_seconds=10)
         assert len(result) == 1
         assert result[0].mac_address == "AA:BB:CC:DD:EE:FF"
@@ -87,17 +85,20 @@ class TestCaptureFrames:
         mock_dot11_elt = MagicMock()
         mock_radiotap = MagicMock()
 
-        with patch.dict("sys.modules", {
-            "scapy": MagicMock(),
-            "scapy.all": MagicMock(
-                sniff=mock_sniff,
-                Dot11=mock_dot11,
-                Dot11Beacon=mock_dot11_beacon,
-                Dot11ProbeReq=mock_dot11_probe,
-                Dot11Elt=mock_dot11_elt,
-                RadioTap=mock_radiotap,
-            ),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "scapy": MagicMock(),
+                "scapy.all": MagicMock(
+                    sniff=mock_sniff,
+                    Dot11=mock_dot11,
+                    Dot11Beacon=mock_dot11_beacon,
+                    Dot11ProbeReq=mock_dot11_probe,
+                    Dot11Elt=mock_dot11_elt,
+                    RadioTap=mock_radiotap,
+                ),
+            },
+        ):
             # Mock sniff to call the prn callback with a fake packet
             def call_prn(iface, prn, timeout, store):
                 pkt = MagicMock()

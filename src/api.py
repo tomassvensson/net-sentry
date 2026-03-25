@@ -141,12 +141,7 @@ def list_devices(
         query = query.filter(Device.device_type == device_type)
 
     total = query.count()
-    devices = (
-        query.order_by(Device.updated_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
+    devices = query.order_by(Device.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
 
     return {
         "total": total,
@@ -208,12 +203,7 @@ def get_device_windows(
     query = session.query(VisibilityWindow).filter_by(mac_address=mac_address)
     total = query.count()
 
-    windows = (
-        query.order_by(VisibilityWindow.last_seen.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
+    windows = query.order_by(VisibilityWindow.last_seen.desc()).offset((page - 1) * page_size).limit(page_size).all()
 
     return {
         "mac_address": mac_address,
@@ -320,11 +310,7 @@ def devices_table_fragment(
     """
     page_size = 20
     devices = (
-        session.query(Device)
-        .order_by(Device.updated_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
+        session.query(Device).order_by(Device.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     )
 
     device_list = []

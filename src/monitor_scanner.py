@@ -34,10 +34,7 @@ class MonitorModeDevice:
 
     def __repr__(self) -> str:
         """Return string representation."""
-        return (
-            f"<MonitorModeDevice(mac={self.mac_address}, "
-            f"signal={self.signal_dbm}dBm, type={self.frame_type})>"
-        )
+        return f"<MonitorModeDevice(mac={self.mac_address}, signal={self.signal_dbm}dBm, type={self.frame_type})>"
 
 
 def is_scapy_available() -> bool:
@@ -75,18 +72,14 @@ def scan_monitor_mode(
     """
     if not is_scapy_available():
         logger.warning(
-            "scapy not installed. Install with: pip install btwifi[monitor]. "
-            "Monitor mode scanning disabled."
+            "scapy not installed. Install with: pip install btwifi[monitor]. Monitor mode scanning disabled."
         )
         return []
 
     try:
         return _capture_frames(interface, duration_seconds, channel_hop)
     except PermissionError:
-        logger.error(
-            "Monitor mode requires root/admin privileges. "
-            "Run with sudo or as administrator."
-        )
+        logger.error("Monitor mode requires root/admin privileges. Run with sudo or as administrator.")
         return []
     except Exception:
         logger.exception("Monitor mode capture failed on interface %s", interface)

@@ -138,9 +138,7 @@ class TestScanIpv6Neighbors:
         mock_platform.system.return_value = "Linux"
         mock_subprocess.run.side_effect = FileNotFoundError("ip not found")
         mock_subprocess.SubprocessError = (
-            type(mock_subprocess.SubprocessError)
-            if hasattr(mock_subprocess, "SubprocessError")
-            else Exception
+            type(mock_subprocess.SubprocessError) if hasattr(mock_subprocess, "SubprocessError") else Exception
         )
 
         neighbors = scan_ipv6_neighbors()

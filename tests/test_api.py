@@ -99,9 +99,8 @@ class TestHealthCheck:
     def test_degraded_without_engine(self) -> None:
         set_engine(None)
         app.dependency_overrides.clear()
-        with patch("src.api.init_database", side_effect=RuntimeError("no db")), \
-             TestClient(app) as c:
-                resp = c.get("/api/v1/health")
+        with patch("src.api.init_database", side_effect=RuntimeError("no db")), TestClient(app) as c:
+            resp = c.get("/api/v1/health")
         data = resp.json()
         assert data["status"] == "degraded"
         assert data["database"]["connected"] is False
