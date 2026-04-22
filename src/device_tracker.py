@@ -104,7 +104,7 @@ def update_visibility(
     scan_time: datetime,
     signal_dbm: float | None = None,
     gap_seconds: int = DEFAULT_GAP_SECONDS,
-) -> VisibilityWindow:
+) -> tuple[VisibilityWindow, bool]:
     """Update or create a visibility window for a device.
 
     If the device was last seen within `gap_seconds`, extend the current
@@ -118,7 +118,8 @@ def update_visibility(
         gap_seconds: Max gap in seconds before starting a new window.
 
     Returns:
-        The current VisibilityWindow for this device.
+        Tuple of (VisibilityWindow, is_new_window) where is_new_window is True
+        when a new window was created (i.e. the device reconnected).
     """
     cutoff = scan_time - timedelta(seconds=gap_seconds)
 
@@ -143,6 +144,7 @@ def update_visibility(
                 window.min_signal_dbm = signal_dbm
             if window.max_signal_dbm is None or signal_dbm > window.max_signal_dbm:
                 window.max_signal_dbm = signal_dbm
+        return window, False
     else:
         # Create new visibility window
         window = VisibilityWindow(
@@ -155,8 +157,7 @@ def update_visibility(
             scan_count=1,
         )
         session.add(window)
-
-    return window
+        return window, True
 
 
 def track_wifi_scan(
@@ -177,13 +178,15 @@ def track_wifi_scan(
     results: list[tuple[Device, VisibilityWindow]] = []
     for network in networks:
         device = upsert_wifi_device(session, network)
-        window = update_visibility(
+        window, is_new = update_visibility(
             session,
             mac_address=network.bssid,
             scan_time=network.scan_time,
             signal_dbm=network.signal_dbm,
             gap_seconds=gap_seconds,
         )
+        if is_new and device.reconnect_count is not None:
+            device.reconnect_count += 1
         results.append((device, window))
     return results
 
@@ -208,13 +211,15 @@ def track_bluetooth_scan(
         device = upsert_bluetooth_device(session, bt_device)
         if device is None:
             continue
-        window = update_visibility(
+        window, is_new = update_visibility(
             session,
             mac_address=bt_device.mac_address,
             scan_time=bt_device.scan_time,
             signal_dbm=None,  # Bluetooth signal not available from PnP scan
             gap_seconds=gap_seconds,
         )
+        if is_new and device.reconnect_count is not None:
+            device.reconnect_count += 1
         results.append((device, window))
     return results
 

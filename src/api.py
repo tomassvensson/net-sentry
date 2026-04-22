@@ -14,13 +14,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from prometheus_client import generate_latest
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import Response as StarletteResponse
+from starlette.types import ASGIApp
 
 from src.database import get_session, init_database
 from src.models import Device, VisibilityWindow
@@ -33,6 +40,32 @@ templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
 
 # Module-level engine reference (set during lifespan)
 _engine = None
+
+# Rate limiter (key by client IP)
+limiter = Limiter(key_func=get_remote_address)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add HTTP security headers to every response."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        """Initialise middleware."""
+        super().__init__(app)
+
+    async def dispatch(self, request: StarletteRequest, call_next: Any) -> StarletteResponse:
+        """Add security headers to the response."""
+        response: StarletteResponse = await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://unpkg.com; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:;"
+        )
+        return response
 
 
 @asynccontextmanager
@@ -56,6 +89,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Register rate-limit exceeded handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
 # Serve static files if directory exists
 _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.exists():
@@ -71,9 +111,15 @@ def get_db() -> Generator[Session, None, None]:
 
 
 # ---------------------------------------------------------------------------
+# API v1 router
+# ---------------------------------------------------------------------------
+v1 = APIRouter(prefix="/api/v1")
+
+
+# ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
-@app.get("/api/v1/health")
+@v1.get("/health")
 def health_check() -> dict[str, Any]:
     """Health check endpoint.
 
@@ -118,8 +164,10 @@ def prometheus_metrics() -> str:
 # ---------------------------------------------------------------------------
 # REST API v1 — Devices
 # ---------------------------------------------------------------------------
-@app.get("/api/v1/devices")
+@v1.get("/devices")
+@limiter.limit("100/minute")
 def list_devices(
+    request: Request,
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=200, description="Items per page"),
     device_type: str | None = Query(None, description="Filter by device type"),
@@ -128,6 +176,7 @@ def list_devices(
     """List all known devices with pagination.
 
     Args:
+        request: FastAPI request (required by rate limiter).
         page: Page number (1-indexed).
         page_size: Number of items per page.
         device_type: Optional filter.
@@ -152,14 +201,17 @@ def list_devices(
     }
 
 
-@app.get("/api/v1/devices/{mac_address}")
+@v1.get("/devices/{mac_address}")
+@limiter.limit("200/minute")
 def get_device(
+    request: Request,
     mac_address: str,
     session: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Get device details by MAC address.
 
     Args:
+        request: FastAPI request (required by rate limiter).
         mac_address: Device MAC address.
         session: Database session.
 
@@ -182,8 +234,10 @@ def get_device(
     return result
 
 
-@app.get("/api/v1/devices/{mac_address}/windows")
+@v1.get("/devices/{mac_address}/windows")
+@limiter.limit("100/minute")
 def get_device_windows(
+    request: Request,
     mac_address: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
@@ -192,6 +246,7 @@ def get_device_windows(
     """Get visibility windows for a device.
 
     Args:
+        request: FastAPI request (required by rate limiter).
         mac_address: Device MAC address.
         page: Page number.
         page_size: Items per page.
@@ -218,11 +273,13 @@ def get_device_windows(
 # ---------------------------------------------------------------------------
 # REST API v1 — Summary
 # ---------------------------------------------------------------------------
-@app.get("/api/v1/summary")
-def get_summary(session: Session = Depends(get_db)) -> dict[str, Any]:
+@v1.get("/summary")
+@limiter.limit("60/minute")
+def get_summary(request: Request, session: Session = Depends(get_db)) -> dict[str, Any]:
     """Get an overview of the device database.
 
     Args:
+        request: FastAPI request (required by rate limiter).
         session: Database session.
 
     Returns:
@@ -292,7 +349,7 @@ def dashboard(request: Request, session: Session = Depends(get_db)) -> HTMLRespo
     )
 
 
-@app.get("/api/v1/devices-table", response_class=HTMLResponse)
+@v1.get("/devices-table", response_class=HTMLResponse)
 def devices_table_fragment(
     request: Request,
     page: int = Query(1, ge=1),
@@ -338,6 +395,10 @@ def devices_table_fragment(
     )
 
 
+# Register all v1 routes with the app
+app.include_router(v1)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -354,6 +415,7 @@ def _serialize_device(device: Device) -> dict[str, Any]:
         "ip_address": device.ip_address,
         "category": device.category,
         "is_whitelisted": device.is_whitelisted,
+        "reconnect_count": device.reconnect_count,
         "created_at": device.created_at.isoformat() if device.created_at else None,
         "updated_at": device.updated_at.isoformat() if device.updated_at else None,
     }

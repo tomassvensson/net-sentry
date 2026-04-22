@@ -34,6 +34,7 @@ class Device(Base):
     category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     extra_info: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_whitelisted: Mapped[bool] = mapped_column(default=False, nullable=False)
+    reconnect_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
