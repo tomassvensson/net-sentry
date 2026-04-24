@@ -1,7 +1,7 @@
 services:
-  btwifi:
+  net-sentry:
     build: .
-    container_name: btwifi-scanner
+    container_name: net-sentry-scanner
     restart: unless-stopped
     network_mode: host
     volumes:
@@ -10,7 +10,7 @@ services:
     environment:
       - BTWIFI_CONTINUOUS=true
       - BTWIFI_SCAN_INTERVAL=60
-      - DATABASE_URL=sqlite:///data/btwifi.db
+      - DATABASE_URL=sqlite:///data/net-sentry.db
     # Required for Bluetooth and network scanning
     cap_add:
       - NET_ADMIN
@@ -30,12 +30,12 @@ services:
   #   Prometheus: http://localhost:9090
   #   Grafana:    http://localhost:3000  (default login: admin / admin)
   #
-  # BtWiFi metrics are at http://localhost:8000/metrics
+  # Net Sentry metrics are at http://localhost:8000/metrics
   # The Grafana dashboard is auto-provisioned from grafana/provisioning/
   # -------------------------------------------------------------------------
   prometheus:
     image: prom/prometheus:v2.52.0
-    container_name: btwifi-prometheus
+    container_name: net-sentry-prometheus
     profiles: [dashboards]
     restart: unless-stopped
     ports:
@@ -48,11 +48,11 @@ services:
       - --storage.tsdb.path=/prometheus
       - --web.enable-lifecycle
     extra_hosts:
-      - "btwifi:host-gateway"  # allow Prometheus to reach BtWiFi on the host
+      - "net-sentry:host-gateway"  # allow Prometheus to reach Net Sentry on the host
 
   grafana:
     image: grafana/grafana:10.4.2
-    container_name: btwifi-grafana
+    container_name: net-sentry-grafana
     profiles: [dashboards]
     restart: unless-stopped
     ports:
@@ -71,38 +71,38 @@ services:
   #   docker compose --profile postgres up
   #
   # Set the database URL in config.yaml or environment:
-  #   DATABASE_URL=postgresql+pg8000://btwifi:btwifi@localhost:5432/btwifi
+  #   DATABASE_URL=postgresql+pg8000://net-sentry:net-sentry@localhost:5432/net-sentry
   #
-  # Access pgAdmin: http://localhost:5050  (admin@btwifi.local / admin)
+  # Access pgAdmin: http://localhost:5050  (admin@net-sentry.local / admin)
   # -------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
-    container_name: btwifi-postgres
+    container_name: net-sentry-postgres
     profiles: [postgres]
     restart: unless-stopped
     ports:
       - "5432:5432"
     environment:
-      - POSTGRES_USER=btwifi
-      - POSTGRES_PASSWORD=btwifi
-      - POSTGRES_DB=btwifi
+      - POSTGRES_USER=net-sentry
+      - POSTGRES_PASSWORD=net-sentry
+      - POSTGRES_DB=net-sentry
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U btwifi"]
+      test: ["CMD-SHELL", "pg_isready -U net-sentry"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   pgadmin:
     image: dpage/pgadmin4:8.6
-    container_name: btwifi-pgadmin
+    container_name: net-sentry-pgadmin
     profiles: [postgres]
     restart: unless-stopped
     ports:
       - "5050:80"
     environment:
-      - PGADMIN_DEFAULT_EMAIL=admin@btwifi.local
+      - PGADMIN_DEFAULT_EMAIL=admin@net-sentry.local
       - PGADMIN_DEFAULT_PASSWORD=admin
     volumes:
       - pgadmin_data:/var/lib/pgadmin

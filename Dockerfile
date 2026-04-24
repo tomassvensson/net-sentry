@@ -1,7 +1,7 @@
 FROM python:3.13-slim
 
-LABEL maintainer="btwifi"
-LABEL description="BtWiFi Device Visibility Tracker"
+LABEL maintainer="net-sentry"
+LABEL description="Net Sentry - Network Device Visibility Tracker"
 
 WORKDIR /app
 

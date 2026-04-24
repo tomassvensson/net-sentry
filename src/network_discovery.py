@@ -33,6 +33,7 @@ class NetworkDevice:
     vendor: str | None = None
     is_randomized: bool = False
     arp_type: str = "dynamic"  # "dynamic" or "static"
+    network_segment: str | None = None  # Subnet/VLAN label from ping_sweep config
     scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __post_init__(self) -> None:
@@ -258,7 +259,12 @@ def _ping_host(ip: str, timeout: float = 1.0) -> str | None:
     return None
 
 
-def ping_sweep(subnets: list[str], max_workers: int = 40, timeout: float = 1.0) -> list[NetworkDevice]:
+def ping_sweep(
+    subnets: list[str],
+    max_workers: int = 40,
+    timeout: float = 1.0,
+    subnet_labels: dict[str, str] | None = None,
+) -> list[NetworkDevice]:
     """Ping-sweep one or more subnets and return responding hosts.
 
     For hosts discovered through a NAT (where real MACs aren't available),
@@ -268,15 +274,26 @@ def ping_sweep(subnets: list[str], max_workers: int = 40, timeout: float = 1.0) 
         subnets: List of CIDR subnets to scan (e.g. ["192.168.0.0/24"]).
         max_workers: Maximum concurrent pings.
         timeout: Ping timeout per host in seconds.
+        subnet_labels: Optional mapping from CIDR string to a human-readable
+            segment label (e.g. ``{"192.168.1.0/24": "office"}``).  When
+            provided, each discovered device gets its ``network_segment``
+            field set to the corresponding label (or the raw CIDR if no
+            label is defined).
 
     Returns:
         List of NetworkDevice objects for responding hosts.
     """
+    _subnet_labels: dict[str, str] = subnet_labels or {}
+    # Build a map from each host IP to its source CIDR (for labelling)
+    ip_to_cidr: dict[str, str] = {}
     targets: list[str] = []
     for cidr in subnets:
         try:
             network = ipaddress.ip_network(cidr, strict=False)
-            targets.extend(str(h) for h in network.hosts())
+            for h in network.hosts():
+                host_str = str(h)
+                targets.append(host_str)
+                ip_to_cidr[host_str] = cidr
         except ValueError:
             logger.warning("Invalid subnet: %s", cidr)
 
@@ -300,6 +317,11 @@ def ping_sweep(subnets: list[str], max_workers: int = 40, timeout: float = 1.0) 
         mac = _ip_to_pseudo_mac(ip)
         hostname = _resolve_hostname(ip)
         vendor = lookup_vendor(mac)
+        # Determine the network segment label for this device
+        source_cidr = ip_to_cidr.get(ip)
+        segment: str | None = None
+        if source_cidr:
+            segment = _subnet_labels.get(source_cidr, source_cidr)
         devices.append(
             NetworkDevice(
                 ip_address=ip,
@@ -307,6 +329,7 @@ def ping_sweep(subnets: list[str], max_workers: int = 40, timeout: float = 1.0) 
                 hostname=hostname,
                 vendor=vendor,
                 arp_type="ping",
+                network_segment=segment,
             )
         )
 

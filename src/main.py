@@ -1,4 +1,4 @@
-"""BtWiFi — Main entry point for the device visibility tracker.
+"""Net Sentry — Main entry point for the device visibility tracker.
 
 Scans for WiFi networks, Bluetooth devices, and local network devices,
 then stores results in the database and displays a human-readable table.
@@ -34,8 +34,10 @@ from src.device_tracker import (
 from src.ipv6_scanner import Ipv6Neighbor, scan_ipv6_neighbors
 from src.mdns_scanner import MdnsDevice
 from src.models import Device, VisibilityWindow
+from src.home_assistant import HaDevice, build_ha_lookup, enrich_from_ha, fetch_ha_devices
 from src.network_discovery import NetworkDevice, ping_sweep, scan_arp_table
 from src.oui_lookup import is_randomized_mac
+from src.port_scanner import decode_open_ports, encode_open_ports, scan_host_ports
 from src.ssdp_scanner import SsdpDevice
 from src.whitelist import WhitelistManager
 from src.wifi_scanner import WifiNetwork, scan_wifi_networks
@@ -195,7 +197,7 @@ def _format_time(dt: datetime | None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def run_scan(config: AppConfig | None = None) -> None:
+def run_scan(config: AppConfig | None = None, rescan_ports: bool = False) -> None:
     """Run a complete scan cycle: WiFi, Bluetooth, ARP, mDNS, SSDP.
 
     When continuous mode is enabled, repeats scans at the configured
@@ -203,12 +205,13 @@ def run_scan(config: AppConfig | None = None) -> None:
 
     Args:
         config: Application configuration. If None, loads from file/defaults.
+        rescan_ports: Force port re-scan even if cached data exists.
     """
     if config is None:
         config = load_config()
 
     logger.info("=" * 60)
-    logger.info("BtWiFi Device Visibility Tracker — Starting scan")
+    logger.info("Net Sentry Device Visibility Tracker \u2014 Starting scan")
     logger.info("=" * 60)
 
     engine = init_database(config.database.url)
@@ -243,7 +246,9 @@ def run_scan(config: AppConfig | None = None) -> None:
         while not _shutdown_requested:
             scan_number += 1
             logger.info("--- Scan cycle #%d ---", scan_number)
-            _run_single_scan(engine, config, whitelist, alert_mgr, mqtt_pub)
+            _run_single_scan(engine, config, whitelist, alert_mgr, mqtt_pub, rescan_ports=rescan_ports)
+            # After the first cycle, only rescan ports if explicitly requested
+            rescan_ports = False
 
             if _shutdown_requested:
                 break
@@ -260,7 +265,7 @@ def run_scan(config: AppConfig | None = None) -> None:
 
         logger.info("Continuous scanning stopped after %d cycles.", scan_number)
     else:
-        _run_single_scan(engine, config, whitelist, alert_mgr, mqtt_pub)
+        _run_single_scan(engine, config, whitelist, alert_mgr, mqtt_pub, rescan_ports=rescan_ports)
 
     # Cleanup MQTT
     if mqtt_pub is not None:
@@ -273,6 +278,7 @@ def _run_single_scan(
     whitelist: WhitelistManager,
     alert_mgr: AlertManager,
     mqtt_publisher: object | None = None,
+    rescan_ports: bool = False,
 ) -> None:
     """Execute one scan cycle across all enabled scanners.
 
@@ -282,13 +288,27 @@ def _run_single_scan(
         whitelist: Whitelist manager.
         alert_mgr: Alert manager.
         mqtt_publisher: Optional MQTT publisher.
+        rescan_ports: When True, force port re-scan even if cached data exists.
     """
     scan_start = time.time()
     scan_data = _execute_all_scanners(config)
     gap = config.scan.gap_seconds
 
+    # Fetch Home Assistant device names once per cycle (not per device)
+    ha_lookup: dict[str, HaDevice] = {}
+    if config.home_assistant.enabled and config.home_assistant.url:
+        ha_devices = fetch_ha_devices(
+            ha_url=config.home_assistant.url,
+            token=config.home_assistant.token,
+            timeout=config.home_assistant.timeout_seconds,
+        )
+        ha_lookup = build_ha_lookup(ha_devices)
+        logger.info("Home Assistant: enriched lookup with %d entities.", len(ha_lookup))
+
     with get_session(engine) as session:
-        wifi_results, bt_results = _store_scan_results(session, scan_data, whitelist, alert_mgr, gap)
+        wifi_results, bt_results = _store_scan_results(
+            session, scan_data, whitelist, alert_mgr, gap, config, ha_lookup, rescan_ports
+        )
         _categorize_all_devices(session, whitelist)
         _alert_new_tracked_devices(wifi_results + bt_results, whitelist, alert_mgr)
         session.flush()
@@ -378,6 +398,7 @@ def _execute_all_scanners(config: AppConfig) -> _ScanData:
                 config.ping_sweep.subnets,
                 max_workers=config.ping_sweep.max_workers,
                 timeout=config.ping_sweep.timeout_seconds,
+                subnet_labels=config.ping_sweep.subnet_labels or None,
             ),
         )
 
@@ -495,6 +516,9 @@ def _store_scan_results(
     whitelist: WhitelistManager,
     alert_mgr: AlertManager,
     gap: int,
+    config: AppConfig | None = None,
+    ha_lookup: dict[str, HaDevice] | None = None,
+    rescan_ports: bool = False,
 ) -> tuple[
     list[tuple[Device, VisibilityWindow]],
     list[tuple[Device, VisibilityWindow]],
@@ -507,6 +531,9 @@ def _store_scan_results(
         whitelist: Whitelist manager.
         alert_mgr: Alert manager.
         gap: Visibility gap threshold in seconds.
+        config: Application configuration (for port scan settings).
+        ha_lookup: Pre-fetched Home Assistant entity lookup dict.
+        rescan_ports: Force port re-scan even if cached data exists.
 
     Returns:
         Tuple of (wifi_results, bt_results) for alerting.
@@ -519,7 +546,10 @@ def _store_scan_results(
 
     all_network_devices = data.arp_devices + data.ping_sweep_devices
     for arp_dev in all_network_devices:
-        _upsert_network_device(session, arp_dev, whitelist, alert_mgr, data.netbios_names, gap)
+        _upsert_network_device(
+            session, arp_dev, whitelist, alert_mgr, data.netbios_names, gap,
+            config=config, ha_lookup=ha_lookup or {}, rescan_ports=rescan_ports,
+        )
 
     for mdns_dev in data.mdns_devices:
         _upsert_mdns_device(session, mdns_dev, whitelist, alert_mgr, gap)
@@ -563,6 +593,9 @@ def _upsert_network_device(
     alert_mgr: AlertManager,
     netbios_names: dict[str, str],
     gap_seconds: int,
+    config: AppConfig | None = None,
+    ha_lookup: dict[str, HaDevice] | None = None,
+    rescan_ports: bool = False,
 ) -> None:
     """Insert/update a network device from ARP scan.
 
@@ -573,6 +606,9 @@ def _upsert_network_device(
         alert_mgr: Alert manager.
         netbios_names: Map of IP to NetBIOS name.
         gap_seconds: Visibility gap threshold.
+        config: Application config (for port scan settings).
+        ha_lookup: Pre-fetched Home Assistant entity lookup.
+        rescan_ports: Force port re-scan even if cached data exists.
     """
     existing = session.query(Device).filter_by(mac_address=arp_dev.mac_address).first()
 
@@ -580,32 +616,58 @@ def _upsert_network_device(
     nb_name = netbios_names.get(arp_dev.ip_address, "")
     hostname = arp_dev.hostname or nb_name or None
 
+    # Check Home Assistant for a friendly name / area
+    ha_match = enrich_from_ha(arp_dev.mac_address, arp_dev.ip_address, ha_lookup or {})
+    ha_name: str | None = ha_match.friendly_name if ha_match else None
+    ha_area: str | None = ha_match.area if ha_match else None
+
+    # Determine extra_info string
+    extra_parts: list[str] = [f"IP: {arp_dev.ip_address}"]
+    if ha_area:
+        extra_parts.append(f"Area: {ha_area}")
+    extra_info = " | ".join(extra_parts)
+
     if existing is None:
         device = Device(
             mac_address=arp_dev.mac_address,
             device_type="network",
             vendor=arp_dev.vendor,
-            device_name=hostname,
+            device_name=ha_name or hostname,
             hostname=hostname,
             ip_address=arp_dev.ip_address,
-            extra_info=f"IP: {arp_dev.ip_address}",
+            extra_info=extra_info,
+            network_segment=arp_dev.network_segment,
         )
         session.add(device)
+        session.flush()  # populate device.id so we can update open_ports below
 
         alert_mgr.on_new_device(
             mac_address=arp_dev.mac_address,
             device_type="network",
             vendor=arp_dev.vendor,
-            device_name=hostname,
+            device_name=ha_name or hostname,
             is_whitelisted=whitelist.is_known(arp_dev.mac_address),
         )
     else:
-        existing.device_name = hostname or existing.device_name
+        existing.device_name = ha_name or hostname or existing.device_name
         existing.hostname = hostname or existing.hostname
         existing.vendor = arp_dev.vendor or existing.vendor
         existing.ip_address = arp_dev.ip_address
-        if arp_dev.ip_address:
-            existing.extra_info = f"IP: {arp_dev.ip_address}"
+        existing.extra_info = extra_info
+        if arp_dev.network_segment:
+            existing.network_segment = arp_dev.network_segment
+        device = existing
+
+    # Port scanning: run only if enabled and (no cached data or rescan requested)
+    if config is not None and config.port_scan.enabled and arp_dev.ip_address:
+        if rescan_ports or not device.open_ports:
+            open_ports = scan_host_ports(
+                arp_dev.ip_address,
+                ports=config.port_scan.ports,
+                timeout=config.port_scan.timeout_seconds,
+                max_workers=config.port_scan.max_workers,
+            )
+            device.open_ports = encode_open_ports(open_ports) if open_ports else ""
 
     update_visibility(
         session,
@@ -871,6 +933,8 @@ def _display_results(session: DbSession, whitelist: WhitelistManager | None = No
         "Vendor",
         "MAC Address",
         "Signal",
+        "Segment",
+        "Open Ports",
         "First Seen",
         "Last Seen",
         "Details",
@@ -908,8 +972,26 @@ def _build_device_row(
     first_seen = _format_time(window.first_seen if window else None)
     last_seen = _format_time(window.last_seen if window else None)
     details = _format_details(device)
+    segment = device.network_segment or ""
+    open_ports = _format_open_ports(device.open_ports)
 
-    return [type_label, category, name, vendor, device.mac_address, signal_str, first_seen, last_seen, details]
+    return [type_label, category, name, vendor, device.mac_address, signal_str, segment, open_ports, first_seen, last_seen, details]
+
+
+def _format_open_ports(encoded: str | None) -> str:
+    """Format the open_ports column for display.
+
+    Args:
+        encoded: Comma-separated ``port/service`` string from the database,
+            or None if not yet scanned.
+
+    Returns:
+        Human-readable port list (e.g. ``"22/ssh 80/http"``) or empty string.
+    """
+    if not encoded:
+        return ""
+    ports = decode_open_ports(encoded)
+    return " ".join(str(p) for p in ports)
 
 
 def _format_details(device: Device) -> str:
@@ -956,17 +1038,51 @@ def _print_device_table(rows: list[list[str]], headers: list[str]) -> None:
 def main() -> None:
     """Main entry point.
 
-    Supports an optional ``--export <csv|json>`` flag which dumps all known
-    devices to stdout and exits without running a scan.  Accepts an optional
-    ``--output <path>`` flag to write to a file instead of stdout.
+    Supports the following optional CLI flags:
+
+    - ``--once``: Run a single scan cycle regardless of config.
+    - ``--continuous``: Run in continuous loop regardless of config.
+    - ``--rescan-ports``: Force a fresh port scan for all devices this cycle.
+    - ``--export <csv|json>``: Dump all devices to stdout and exit.
+    - ``--output <path>``: Write export to file instead of stdout.
     """
-    # --- Export sub-command ---
+    # Pre-parse scan-control flags (ignore unknown so --export still works below)
+    import argparse as _ap
+
+    _scan_parser = _ap.ArgumentParser(add_help=False)
+    _scan_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single scan cycle and exit (overrides config.scan.continuous).",
+    )
+    _scan_parser.add_argument(
+        "--continuous",
+        action="store_true",
+        help="Run in continuous loop (overrides config.scan.continuous).",
+    )
+    _scan_parser.add_argument(
+        "--rescan-ports",
+        action="store_true",
+        dest="rescan_ports",
+        help="Force a fresh TCP port scan for all network devices this cycle.",
+    )
+    _scan_args, _ = _scan_parser.parse_known_args()
+
+    # --- Export sub-command (handled by its own parser) ---
     if "--export" in sys.argv:
         _run_cli_export()
         return
 
     try:
         config = load_config()
+
+        # Apply CLI overrides
+        if _scan_args.once and _scan_args.continuous:
+            logger.warning("Both --once and --continuous given; --continuous takes precedence.")
+        if _scan_args.continuous:
+            config.scan.continuous = True
+        elif _scan_args.once:
+            config.scan.continuous = False
 
         # Start API server in background thread if enabled
         if config.api.enabled:
@@ -991,7 +1107,7 @@ def main() -> None:
             api_thread.start()
             logger.info("API server started on http://%s:%d", config.api.host, config.api.port)
 
-        run_scan(config)
+        run_scan(config, rescan_ports=_scan_args.rescan_ports)
     except KeyboardInterrupt:
         logger.info("Scan interrupted by user.")
         sys.exit(0)

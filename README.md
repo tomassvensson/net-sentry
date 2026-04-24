@@ -1,475 +1,316 @@
-# BtWiFi - Device Visibility Tracker
+# Net Sentry — Network Device Visibility Tracker
 
-Track which WiFi, Bluetooth, and network devices are and were visible, when, and how strongly.
+> **Formerly known as BtWiFi.** GitHub repo: <https://github.com/tomassvensson/btwf>
 
-## Overview
+Net Sentry continuously or on-demand scans your wireless and wired environment for devices — WiFi access points, Bluetooth peripherals, ARP-visible hosts, mDNS/SSDP services, and IPv6 neighbours — and persists every *visibility window* (who was visible, when, and how strongly) in a local database.
 
-BtWiFi uses multiple discovery protocols to scan for nearby wireless and network devices, tracking their visibility over time. It translates MAC addresses to human-readable vendor/brand names and stores visibility windows in a local SQLite database.
+---
 
 ## Features
 
-- **WiFi Network Scanning** — Discovers nearby WiFi networks and access points on Windows and Linux
-- **Bluetooth Device Scanning** — Discovers nearby classic Bluetooth devices on Windows and BLE devices on Linux
-- **mDNS/Bonjour Discovery** — Finds devices advertising mDNS services (printers, IoT, Apple devices)
-- **SSDP/UPnP Discovery** — Discovers UPnP devices on the network
-- **NetBIOS Name Resolution** — Resolves Windows/SMB device names
-- **ARP Network Discovery** — Discovers devices visible in the ARP table
-- **SNMP Scanner** — Queries network devices for system info via SNMPv2c
-- **Device Categorization** — Automatically categorizes devices (phone, laptop, IoT, router, etc.)
-- **Device Fingerprinting** — Identifies device type, OS, and model from multiple data sources with evidence-weighted confidence scoring
-- **Vendor Identification** — Translates MAC addresses to manufacturer names using the IEEE OUI database
-- **Visibility Tracking** — Stores when devices were first/last seen with signal strength; detail page per device
-- **Data Retention** — Automatically purges old visibility windows with configurable retention period
-- **CSV/JSON Export** — Export device data via API endpoints or CLI flag
-- **JWT Authentication** — Optional token-based auth for all API/v1 endpoints
-- **Whitelist Management** — Tag known devices with custom names and trust levels
-- **Alert System** — Log alerts when new unknown devices appear on the network
-- **Scanner Plugin Interface** — Register third-party scanners via `btwifi.scanners` entry-points
-- **Continuous Scanning** — Run repeated scans with configurable intervals
-- **YAML Configuration** — Configure all scanner options through `config.yaml`
-- **Human-readable Output** — Displays results in a formatted table with categories and vendor names
-- **Docker Support** — Dockerfile and docker-compose.yml with Prometheus/Grafana and PostgreSQL profiles
+| Feature | Details |
+|---|---|
+| **WiFi scanning** | Discovers nearby access points (SSID, BSSID, signal, channel, encryption). Uses `netsh` on Windows, `nmcli`/`iw` on Linux |
+| **Bluetooth / BLE** | Classic Bluetooth via PowerShell (Windows) or BlueZ; BLE via `bleak` on Linux |
+| **ARP table** | Reads the kernel ARP cache for currently-reachable LAN devices |
+| **Ping sweep** | ICMP sweep of configured subnets (useful in NAT/WSL2 setups) |
+| **Network segments** | Label subnets (`192.168.1.0/24` → `"office"`) for display grouping |
+| **Port scanning** | Optional TCP connect-scan of each network device; results cached per device |
+| **mDNS / Bonjour** | Discovers `.local` services on the LAN |
+| **SSDP / UPnP** | Discovers UPnP-advertising devices |
+| **NetBIOS** | Reverse-resolves Windows hostnames from IP |
+| **IPv6 NDP** | Reads IPv6 neighbour discovery table |
+| **Monitor mode** | Passive 802.11 packet capture via Scapy (Linux / Docker) |
+| **SNMP** | Polls SNMP-capable devices for system description |
+| **Home Assistant** | Enriches device names and areas from HA `device_tracker.*` entities |
+| **OUI vendor lookup** | Maps MAC OUI prefix to manufacturer name |
+| **Visibility windows** | Only start/end of each presence window is stored (efficient, not every ping) |
+| **REST API** | Versioned FastAPI at `/api/v1/` with JSON endpoints |
+| **Web dashboard** | HTMX-powered live table at `http://localhost:8000/` |
+| **Prometheus metrics** | Scraped at `http://localhost:8000/metrics` |
+| **Grafana dashboard** | Pre-provisioned dashboard (included in repo) |
+| **MQTT** | Publishes device events to an MQTT broker |
+| **Alerts** | Log / sound on new device discovery |
+| **Whitelist** | Mark trusted devices; unknown devices are flagged |
+| **Export** | CSV and JSON export via CLI flag or API endpoint |
+| **Alembic migrations** | Schema is versioned; upgrades run automatically |
+| **Docker** | Single-container scanner + optional Prometheus/Grafana stack |
 
-## Technology Stack
-
-- **Language:** Python 3.10+
-- **Database:** SQLite (default) or PostgreSQL via SQLAlchemy + Alembic
-- **WiFi Scanning:** Windows Native WiFi API (`netsh`) / Linux `nmcli` or `iw`
-- **Bluetooth Scanning:** Windows Bluetooth API via PowerShell
-- **BLE Scanning:** Linux `bleak` + BlueZ
-- **ARP Discovery:** `ip neigh` (Linux) / `arp -a` (Windows)
-- **mDNS Discovery:** zeroconf library
-- **SNMP Scanning:** pysnmp-lextudio (SNMPv2c)
-- **OUI Lookup:** IEEE MA-L (OUI) database via mac-vendor-lookup
-- **Authentication:** python-jose (JWT) + bcrypt
-- **Configuration:** PyYAML
-- **Testing:** pytest with 520+ tests, 87% coverage
-- **REST API:** FastAPI with OpenAPI/Swagger UI
-- **Web Dashboard:** HTMX server-side dashboard at `/`
-- **Metrics:** Prometheus-compatible `/metrics` endpoint
-- **Monitoring:** Grafana dashboard + Prometheus scrape config
-- **Linting:** ruff (lint + format)
-- **Type Checking:** mypy
-- **CI/CD:** GitHub Actions (lint, test matrix, Trivy, CodeQL)
-- **Code Quality:** SonarQube
+---
 
 ## Quick Start
 
+### Prerequisites
+
+- Python 3.10+
+- Linux (recommended) or Windows
+- For Bluetooth scanning: BlueZ (Linux) or PowerShell (Windows)
+- For monitor mode: compatible wireless adapter in monitor mode + Scapy
+
+### Install
+
 ```bash
-# Create virtual environment
-python3 -m venv .venv
-
-# Activate (Linux / WSL / macOS)
+git clone https://github.com/tomassvensson/btwf.git
+cd btwf
+python -m venv .venv
+# Linux/macOS:
 source .venv/bin/activate
-# Activate (Windows PowerShell)
-# .venv\Scripts\Activate.ps1
+# Windows:
+.venv\Scripts\Activate.ps1
 
-# Install dependencies
 pip install -e ".[dev]"
-
-# Create your config
 cp config.yaml.example config.yaml
-# Edit config.yaml to your needs
-python -m src.main
+# edit config.yaml as needed
 ```
 
-> **Linux / WSL note:** Linux WiFi scanning uses `nmcli` first and falls back
-> to `iw` when available. Linux BLE scanning uses `bleak` with BlueZ/DBus.
-> On systems without WiFi or Bluetooth hardware access, set `wifi_enabled`
-> and/or `ble_enabled` to `false` in `config.yaml` to suppress those scans.
-> Under WSL, direct WiFi and Bluetooth hardware access is usually unavailable,
-> so those scanners are skipped automatically. The ARP, mDNS, SSDP, NetBIOS,
-> and IPv6 scanners work cross-platform. Under WSL2, enable `ping_sweep`
-> with your LAN subnet to discover devices beyond the virtual NAT gateway.
+### Run a single scan
+
+```bash
+net-sentry --once
+```
+
+### Run continuously
+
+```bash
+net-sentry --continuous
+# or set continuous: true in config.yaml and run:
+net-sentry
+```
+
+### Force a fresh TCP port scan
+
+```bash
+net-sentry --once --rescan-ports
+```
+
+### Export all known devices
+
+```bash
+net-sentry --export csv
+net-sentry --export json --output devices.json
+```
+
+---
+
+## CLI Reference
+
+```
+net-sentry [OPTIONS]
+
+Options:
+  --once            Run a single scan cycle and exit (overrides config.scan.continuous)
+  --continuous      Run in continuous loop (overrides config.scan.continuous)
+  --rescan-ports    Force fresh TCP port scan for all discovered network devices
+  --export csv|json Dump all known devices and exit (no scan)
+  --output PATH     Write --export output to file instead of stdout
+```
+
+---
 
 ## Configuration
 
-Copy `config.yaml.example` to `config.yaml` and customize:
+Copy `config.yaml.example` to `config.yaml` and edit.  Key sections:
 
 ```yaml
 scan:
+  continuous: false          # override with --continuous / --once
+  interval_seconds: 60
   wifi_enabled: true
   bluetooth_enabled: true
   ble_enabled: true
   arp_enabled: true
-  mdns_enabled: true
-  ssdp_enabled: true
-  netbios_enabled: true
-  continuous: false
-  interval_seconds: 60
+  snmp_enabled: false
+  monitor_mode_enabled: false
 
-whitelist:
-  - mac_address: "AA:BB:CC:DD:EE:FF"
-    name: "My Router"
-    trusted: true
-    category: "router"
-
-alert:
+ping_sweep:
   enabled: true
-  log_file: "alerts.log"
+  subnets:
+    - "192.168.1.0/24"
+    - "192.168.2.0/24"
+  subnet_labels:
+    "192.168.1.0/24": "office"
+    "192.168.2.0/24": "IoT"
+
+port_scan:
+  enabled: true
+  ports: [22, 80, 443, 445, 3389, 8080]
+  timeout_seconds: 0.5
+
+home_assistant:
+  enabled: true
+  url: "http://homeassistant.local:8123"
+  token: "eyJ..."         # long-lived access token from HA Profile -> Security
+
+api:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8000
+  auth_enabled: false     # set true + configure api_users for production
+
+mqtt:
+  enabled: false
+  broker_host: "localhost"
+  broker_port: 1883
+  topic_prefix: "net-sentry"
 ```
 
-## Project Structure
+---
 
-```
-btwf/
-├── src/
-│   ├── __init__.py
-│   ├── main.py              # Entry point and scan orchestration
-│   ├── models.py             # SQLAlchemy database models
-│   ├── database.py           # Database session management
-│   ├── config.py             # YAML configuration loader
-│   ├── wifi_scanner.py       # WiFi scanning (Windows netsh, Linux nmcli/iw)
-│   ├── bluetooth_scanner.py  # Windows Bluetooth + Linux BLE scanning
-│   ├── network_discovery.py  # ARP table scanning
-│   ├── mdns_scanner.py       # mDNS/Bonjour service discovery
-│   ├── ssdp_scanner.py       # SSDP/UPnP device discovery
-│   ├── netbios_scanner.py    # NetBIOS name resolution
-│   ├── oui_lookup.py         # MAC-to-vendor translation
-│   ├── device_tracker.py     # Visibility window tracking
-│   ├── categorizer.py        # Device categorization engine
-│   ├── fingerprint.py        # Device fingerprinting
-│   ├── whitelist.py          # Known device management
-│   ├── alert.py              # New device alert system
-│   ├── api.py                # FastAPI REST API + HTMX dashboard
-│   ├── metrics.py            # Prometheus metrics
-│   ├── templates/            # Jinja2 / HTMX dashboard templates
-│   │   ├── dashboard.html
-│   │   ├── device_detail.html
-│   │   ├── devices_table.html
-│   │   └── windows_table.html
-│   └── data/
-│       └── .gitkeep          # IEEE OUI CSV downloaded here
-├── tests/                    # pytest test suite
-│   ├── e2e/                  # Playwright E2E browser tests
-│   │   └── test_dashboard_e2e.py
-│   ├── test_database_integration.py  # TestContainers PostgreSQL tests
-│   ├── test_main.py
-│   ├── test_config.py
-│   ├── test_categorizer.py
-│   ├── test_whitelist.py
-│   ├── test_alert.py
-│   ├── test_fingerprint.py
-│   ├── test_mdns_scanner.py
-│   ├── test_ssdp_scanner.py
-│   ├── test_netbios_scanner.py
-│   ├── test_wifi_scanner.py
-│   ├── test_bluetooth_scanner.py
-│   ├── test_network_discovery.py
-│   ├── test_oui_lookup.py
-│   └── test_database.py
-├── .github/
-│   └── workflows/
-│       ├── ci.yml            # GitHub Actions CI pipeline
-│       └── oui-update.yml    # Weekly IEEE OUI database refresh
-├── docs/
-│   └── adr/
-│       └── 001-technology-choice.md
-├── Dockerfile
-├── docker-compose.yml
-├── config.yaml.example
-├── pyproject.toml
-├── requirements.txt
-├── sonar-project.properties
-└── README.md
+## REST API
+
+The API is versioned under `/api/v1/`.  OpenAPI docs are at `http://localhost:8000/docs`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/health` | Liveness check -> `{"status":"ok"}` |
+| `GET` | `/api/v1/devices` | List all known devices (supports `limit`/`offset`) |
+| `GET` | `/api/v1/devices/{mac}` | Single device with visibility history |
+| `DELETE` | `/api/v1/devices/{mac}` | Remove a device record |
+| `GET` | `/api/v1/windows` | List visibility windows |
+| `GET` | `/api/v1/export/csv` | Export all devices as CSV |
+| `GET` | `/api/v1/export/json` | Export all devices as JSON |
+| `POST` | `/api/v1/auth/token` | Obtain JWT (when auth enabled) |
+| `GET` | `/metrics` | Prometheus metrics (no auth) |
+| `GET` | `/` | HTMX web dashboard |
+| `GET` | `/devices/{mac}` | Device detail page |
+
+---
+
+## Metrics & Observability
+
+Net Sentry exposes Prometheus metrics at `/metrics`:
+
+- `net_sentry_devices_total` — gauge of known devices by type
+- `net_sentry_scans_total` — scan cycle counter
+- `net_sentry_scan_duration_seconds` — scan latency histogram
+
+### Grafana
+
+A pre-built dashboard JSON is included at `grafana/provisioning/dashboards/btwifi.json`.
+It is auto-provisioned when you start the dashboards stack (see Docker section below).
+
+---
+
+## Docker
+
+### Minimal stack (scanner only)
+
+```bash
+docker compose up net-sentry
 ```
 
-## Architecture
+### Full stack (scanner + Prometheus + Grafana)
 
-See [ADR-001](docs/adr/001-technology-choice.md) for the technology choice rationale.
+```yaml
+# docker-compose.yml is already in the repo
+# Prometheus: http://localhost:9090
+# Grafana:    http://localhost:3000  (admin / admin)
+```
+
+```bash
+docker compose --profile dashboards up
+```
+
+### With PostgreSQL
+
+```bash
+docker compose --profile postgres up
+# Set DATABASE_URL=postgresql+pg8000://net-sentry:net-sentry@localhost:5432/net-sentry
+```
+
+---
+
+## Database Migrations
+
+Schema changes are managed with Alembic.
+
+```bash
+# Apply all pending migrations
+alembic upgrade head
+
+# Create a new migration
+alembic revision --autogenerate -m "my change"
+```
+
+Migrations run automatically at startup via `init_database()`.
+
+---
+
+## Development
+
+```bash
+# Run all tests
+pytest --timeout=60
+
+# Run only fast unit tests (skip integration / E2E)
+pytest -m "not integration and not e2e" --timeout=60
+
+# Lint + type-check
+ruff check .
+mypy src/
+
+# Coverage report
+pytest --cov=src --cov-report=term-missing
+```
+
+---
 
 ## Security
 
-- Scanned devices are never given access to the network or computer
-- Discovery is read-only, but some optional scanners actively send standard
-  network probes (for example ping sweep, mDNS, SSDP, NetBIOS, and SNMP)
-- Discovery does not authenticate to devices or change device state
-- See [SECURITY.md](SECURITY.md) for the vulnerability disclosure policy
-
-## REST API & Web Dashboard
-
-BtWiFi ships a FastAPI service that provides a live web dashboard and a
-versioned JSON API.
-
-### Starting the API server
-
-```bash
-# Development (auto-reload on code changes)
-uvicorn src.api:app --reload
-
-# Production
-uvicorn src.api:app --host 0.0.0.0 --port 8000
-```
-
-| URL | Description |
-|-----|-------------|
-| `http://localhost:8000/` | Live device dashboard (HTMX) |
-| `http://localhost:8000/docs` | Swagger / OpenAPI UI |
-| `http://localhost:8000/redoc` | ReDoc UI |
-| `http://localhost:8000/metrics` | Prometheus metrics |
-
-### API Endpoints (v1)
-
-All JSON endpoints are under `/api/v1/`.
-
-#### Health check
-
-```bash
-curl http://localhost:8000/api/v1/health
-# {"status":"healthy","timestamp":"2026-04-24T07:00:00+00:00","version":"0.1.0","database":{"connected":true,"device_count":42}}
-```
-
-#### List devices (paginated)
-
-```bash
-# First page, default page size (50)
-curl http://localhost:8000/api/v1/devices
-
-# Explicit pagination
-curl "http://localhost:8000/api/v1/devices?page=1&page_size=10"
-```
-
-Response:
-```json
-{
-  "devices": [
-    {
-      "id": 1,
-      "mac_address": "AA:BB:CC:DD:EE:FF",
-      "device_type": "wifi_ap",
-      "vendor": "Apple Inc.",
-      "device_name": null,
-      "reconnect_count": 3,
-      "created_at": "2024-01-01T12:00:00",
-      "updated_at": "2024-01-01T13:00:00"
-    }
-  ],
-  "total": 42,
-  "page": 1,
-  "page_size": 10,
-  "pages": 5
-}
-```
-
-#### Get a single device
-
-```bash
-curl http://localhost:8000/api/v1/devices/AA:BB:CC:DD:EE:FF
-```
-
-#### Visibility windows for a device
-
-```bash
-curl http://localhost:8000/api/v1/devices/AA:BB:CC:DD:EE:FF/windows
-```
-
-Response:
-```json
-{
-  "mac_address": "AA:BB:CC:DD:EE:FF",
-  "total": 1,
-  "page": 1,
-  "page_size": 50,
-  "pages": 1,
-  "windows": [
-    {
-      "id": 1,
-      "mac_address": "AA:BB:CC:DD:EE:FF",
-      "first_seen": "2024-01-01T12:00:00",
-      "last_seen": "2024-01-01T13:00:00",
-      "signal_strength_dbm": -65,
-      "min_signal_dbm": -70,
-      "max_signal_dbm": -60,
-      "scan_count": 5
-    }
-  ]
-}
-```
-
-#### Summary statistics
-
-```bash
-curl http://localhost:8000/api/v1/summary
-# {"total_devices":42,"active_windows":7,"device_types":{"wifi_ap":30,"bluetooth":12},"timestamp":"2026-04-24T07:00:00+00:00"}
-```
-
-#### HTMX table fragment (for dashboard auto-refresh)
-
-```bash
-curl "http://localhost:8000/api/v1/devices-table?page=1"
-# Returns an HTML fragment suitable for HTMX injection
-```
-
-#### Prometheus metrics
-
-```bash
-curl http://localhost:8000/metrics
-```
-
-### Rate Limits
-
-The `/api/v1/devices` endpoint is rate-limited to **100 requests per minute**
-per IP address (via slowapi). Exceeding the limit returns HTTP `429 Too Many Requests`.
-
-### JWT Authentication
-
-Auth is **disabled by default**. Enable it in `config.yaml`:
-
-```yaml
-api:
-  auth_enabled: true
-  jwt_secret: "<long-random-string>"   # or set env var BTWIFI_JWT_SECRET
-  jwt_expire_minutes: 60
-  api_users:
-    admin: "$2b$12$..."   # bcrypt hash
-```
-
-Generate a password hash:
-
-```bash
-python -c "import bcrypt; print(bcrypt.hashpw(b'mypassword', bcrypt.gensalt()).decode())"
-```
-
-Obtain a token and use it:
-
-```bash
-# Login
-curl -X POST http://localhost:8000/api/v1/auth/token \
-     -d "username=admin&password=mypassword"
-
-# Use the token
-curl -H "Authorization: Bearer <token>" http://localhost:8000/api/v1/devices
-```
-
-### Data Export
-
-Export all devices to CSV or JSON via the API or the CLI.
-
-**API:**
-
-```bash
-curl -H "Authorization: Bearer <token>" \
-  http://localhost:8000/api/v1/export/devices.csv -o devices.csv
-
-curl -H "Authorization: Bearer <token>" \
-  http://localhost:8000/api/v1/export/devices.json -o devices.json
-
-curl -H "Authorization: Bearer <token>" \
-  http://localhost:8000/api/v1/export/windows.csv -o windows.csv
-```
-
-**CLI:**
-
-```bash
-python -m src.main --export csv --output devices.csv
-python -m src.main --export json --output devices.json
-# Write to stdout
-python -m src.main --export csv --output -
-```
-
-### Data Retention
-
-Visibility windows older than `retention_days` are purged automatically once per day. Set `retention_days: 0` (default) to keep all data.
-
-```yaml
-database:
-  retention_days: 90   # purge windows older than 90 days (0 = keep forever)
-```
-
-SQLite databases are VACUUMed after purges that actually delete rows, to reclaim disk space.
-
-### Device Detail Page
-
-Each device has a detail page at `/devices/<mac_address>` showing all visibility windows in a paginated table. Links appear in the main dashboard.
-
-### SNMP Scanner
-
-The SNMP scanner queries devices on the network for system information using SNMPv2c. It is registered as a scanner plugin (entry point `btwifi.scanners`).
-
-```yaml
-snmp:
-  enabled: true
-  subnet: "192.168.1.0/24"
-  community: "public"
-  port: 161
-  timeout_seconds: 2
-  retries: 1
-  max_hosts: 254
-```
-
-Requires `pysnmp-lextudio` (installed via `pip install -e ".[dev]"` or `pip install pysnmp-lextudio`).
-
-### Scanner Plugins
-
-Third-party scanners can be registered via the `btwifi.scanners` entry-point group:
-
-```toml
-[project.entry-points."btwifi.scanners"]
-my_scanner = "mypackage.scanner:MyScanner"
-```
-
-Your class must subclass `src.scanner_plugin.ScannerPlugin` and implement `scan(config) -> list[ScanResult]`.
-
-### Prometheus & Grafana
-
-Start the monitoring stack:
-
-```bash
-docker compose --profile dashboards up -d
-```
-
-- Prometheus: `http://localhost:9090`
-- Grafana: `http://localhost:3000` (admin/admin)
-
-A pre-built BtWiFi dashboard is provisioned automatically from `grafana/provisioning/`.
-
-### PostgreSQL Backend
-
-Use PostgreSQL instead of SQLite for multi-instance or production deployments:
-
-```bash
-docker compose --profile postgres up -d
-```
-
-Then set `database.url` in `config.yaml`:
-
-```yaml
-database:
-  url: "postgresql://btwifi:btwifi@localhost:5432/btwifi"
-```
-
-See [docs/database-migrations.md](docs/database-migrations.md) for Alembic migration guidance.
-
-### Confidence Scoring
-
-Device fingerprints are scored using an evidence-weighted complement-product formula:
-
-$$confidence = 1 - \prod_{i}(1 - w_i)$$
-
-Each evidence item has a source, field, value, and weight (0–1). Multiple independent signals combine to increase confidence without capping at the weight of any single source.
-
-## Project Structure
+- JWT authentication on the API is **disabled by default** for ease of local use.
+  Enable it for any internet-facing deployment.
+- The scanner requires `NET_ADMIN` / `NET_RAW` capabilities (or root) for raw-socket operations.
+  The Docker container is **not** run in `privileged` mode by default.
+- See [SECURITY.md](SECURITY.md) for the vulnerability disclosure policy.
+
+---
+
+## Architecture
 
 ```
-btwf/
+net-sentry/
 ├── src/
-│   ├── api.py                # FastAPI REST API + HTMX dashboard
-│   ├── auth.py               # JWT authentication
-│   ├── scanner_plugin.py     # Plugin interface + entry-point loader
-│   ├── snmp_scanner.py       # SNMP v2c network scanner
-│   ├── fingerprint.py        # Evidence-weighted device fingerprinting
-│   ├── database.py           # DB sessions + retention purge
-│   ├── config.py             # YAML + env-var configuration
-│   ├── main.py               # CLI entry point
-│   └── ...                   # other scanners and modules
-├── tests/                    # 520+ unit tests, 87% coverage
-├── alembic/                  # DB migrations
-├── docs/
-│   ├── adr/001-technology-choice.md
-│   └── database-migrations.md
-├── grafana/                  # Grafana dashboard provisioning
-├── docker-compose.yml        # Profiles: dashboards, postgres
-├── Dockerfile
-└── config.yaml.example
+│   ├── main.py            # Entry point: CLI, scan orchestration, display
+│   ├── config.py          # Dataclass-based config loader (config.yaml)
+│   ├── models.py          # SQLAlchemy ORM models (Device, VisibilityWindow)
+│   ├── database.py        # DB init, session factory, retention
+│   ├── device_tracker.py  # Visibility window logic
+│   ├── api.py             # FastAPI application (REST + HTMX dashboard)
+│   ├── auth.py            # JWT auth helpers
+│   ├── metrics.py         # Prometheus metrics
+│   ├── wifi_scanner.py    # WiFi scanning
+│   ├── bluetooth_scanner.py  # Classic BT + BLE
+│   ├── network_discovery.py  # ARP table + ping sweep (network_segment support)
+│   ├── port_scanner.py    # TCP connect-scan with port name resolution
+│   ├── home_assistant.py  # HA REST API client for device enrichment
+│   ├── mdns_scanner.py    # mDNS/Bonjour
+│   ├── ssdp_scanner.py    # SSDP/UPnP
+│   ├── netbios_scanner.py # NetBIOS name resolution
+│   ├── ipv6_scanner.py    # IPv6 NDP table
+│   ├── monitor_scanner.py # 802.11 monitor mode (Scapy)
+│   ├── snmp_scanner.py    # SNMP polling
+│   ├── mqtt_publisher.py  # MQTT event publishing
+│   ├── alert.py           # New-device alerting
+│   ├── whitelist.py       # Known-device management
+│   ├── categorizer.py     # Device type categorization
+│   ├── fingerprint.py     # OS / device fingerprinting
+│   └── oui_lookup.py      # MAC vendor resolution
+├── alembic/               # Database migrations
+├── tests/                 # pytest unit + integration + E2E tests
+├── grafana/               # Grafana provisioning
+├── prometheus/            # Prometheus config
+├── docs/                  # Architecture decision records
+└── docker-compose.yml
 ```
 
+---
+
+## ADRs
+
+Architecture decision records live in [docs/adr/](docs/adr/).
+
+---
+
+## License
+
+[MIT](LICENSE)

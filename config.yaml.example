@@ -1,4 +1,4 @@
-# BtWiFi Configuration
+# Net Sentry Configuration
 # Copy this to config.yaml and customize as needed.
 
 scan:
@@ -34,6 +34,13 @@ ping_sweep:
     # - "192.168.0.0/24"
   max_workers: 40
   timeout_seconds: 1.0
+  # Map a CIDR subnet to a human-readable label for display/grouping.
+  # If a host's source subnet matches, this label is shown in the "Segment" column.
+  subnet_labels: {}
+  # subnet_labels:
+  #   "192.168.1.0/24": "office"
+  #   "192.168.2.0/24": "IoT"
+  #   "10.10.0.0/16": "servers"
 
 snmp:
   community: "public"
@@ -49,7 +56,7 @@ snmp:
   max_hosts: 254
 
 database:
-  url: "sqlite:///btwifi.db"
+  url: "sqlite:///net-sentry.db"
   # Number of days to keep visibility windows.  Set to 0 to keep forever (default).
   retention_days: 0
   # Run VACUUM on SQLite after a purge to reclaim disk space.
@@ -103,3 +110,32 @@ api:
   cors_origins:
     - "http://localhost"
     - "http://127.0.0.1"
+
+# ---------------------------------------------------------------------------
+# TCP Port scanning
+# Cached results are stored per-device in the database.
+# Use --rescan-ports on the CLI to force a fresh scan.
+# ---------------------------------------------------------------------------
+port_scan:
+  enabled: false
+  # Ports to check on each discovered network device.
+  ports: [21, 22, 23, 25, 53, 80, 443, 445, 3389, 8080, 8443]
+  # Per-port connect timeout (seconds). Keep low to avoid slowing down scans.
+  timeout_seconds: 0.5
+  # Max concurrent port probes per host.
+  max_workers: 20
+
+# ---------------------------------------------------------------------------
+# Home Assistant integration
+# When enabled, Net Sentry queries the HA REST API once per scan cycle
+# and uses the device_tracker.* entities to enrich device names and areas.
+# ---------------------------------------------------------------------------
+home_assistant:
+  enabled: false
+  # Base URL of your Home Assistant instance.
+  url: ""  # e.g. "http://homeassistant.local:8123"
+  # Long-lived access token (generate in HA Profile → Security).
+  token: ""
+  # HTTP timeout for the HA API call (seconds).
+  timeout_seconds: 5.0
+

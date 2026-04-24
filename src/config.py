@@ -61,6 +61,38 @@ class SnmpConfig:
 
 
 @dataclass
+class PortScanConfig:
+    """TCP port scanning settings.
+
+    Port scan results are cached in the Device record and are only
+    re-run when ``--rescan-ports`` is passed on the command line or
+    when a device has no cached port data.
+    """
+
+    enabled: bool = False
+    ports: list[int] = field(
+        default_factory=lambda: [21, 22, 23, 25, 53, 80, 443, 445, 3389, 8080, 8443]
+    )
+    timeout_seconds: float = 0.5
+    max_workers: int = 20
+
+
+@dataclass
+class HomeAssistantConfig:
+    """Home Assistant REST API integration for device name enrichment.
+
+    When enabled, Net Sentry queries the HA REST API once per scan cycle
+    and uses ``device_tracker.*`` entity names and areas to enrich
+    the device names stored in the database.
+    """
+
+    enabled: bool = False
+    url: str = ""  # e.g. "http://homeassistant.local:8123"
+    token: str = ""  # Long-lived access token
+    timeout_seconds: float = 5.0
+
+
+@dataclass
 class PingSweepConfig:
     """Ping sweep discovery settings."""
 
@@ -68,6 +100,10 @@ class PingSweepConfig:
     subnets: list[str] = field(default_factory=list)
     max_workers: int = 40
     timeout_seconds: float = 1.0
+    # Optional human-readable labels for subnets.  Keys are CIDR strings
+    # matching entries in ``subnets``; values are short label strings
+    # (e.g. "office", "IoT", "guest") stored in Device.network_segment.
+    subnet_labels: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -184,6 +220,8 @@ class AppConfig:
     api: ApiConfig = field(default_factory=ApiConfig)
     mqtt: MqttConfig = field(default_factory=MqttConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
+    port_scan: PortScanConfig = field(default_factory=PortScanConfig)
+    home_assistant: HomeAssistantConfig = field(default_factory=HomeAssistantConfig)
 
 
 def load_config(config_path: str | None = None) -> AppConfig:
@@ -265,6 +303,25 @@ def _parse_raw_config(raw: dict) -> AppConfig:
             subnets=ps.get("subnets", config.ping_sweep.subnets),
             max_workers=ps.get("max_workers", config.ping_sweep.max_workers),
             timeout_seconds=ps.get("timeout_seconds", config.ping_sweep.timeout_seconds),
+            subnet_labels=ps.get("subnet_labels", config.ping_sweep.subnet_labels),
+        )
+
+    if "port_scan" in raw:
+        po = raw["port_scan"]
+        config.port_scan = PortScanConfig(
+            enabled=po.get("enabled", config.port_scan.enabled),
+            ports=po.get("ports", config.port_scan.ports),
+            timeout_seconds=po.get("timeout_seconds", config.port_scan.timeout_seconds),
+            max_workers=po.get("max_workers", config.port_scan.max_workers),
+        )
+
+    if "home_assistant" in raw:
+        ha = raw["home_assistant"]
+        config.home_assistant = HomeAssistantConfig(
+            enabled=ha.get("enabled", config.home_assistant.enabled),
+            url=ha.get("url", config.home_assistant.url),
+            token=ha.get("token", config.home_assistant.token),
+            timeout_seconds=ha.get("timeout_seconds", config.home_assistant.timeout_seconds),
         )
 
     if "snmp" in raw:
