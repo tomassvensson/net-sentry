@@ -43,7 +43,7 @@ BtWiFi uses multiple discovery protocols to scan for nearby wireless and network
 - **OUI Lookup:** IEEE MA-L (OUI) database via mac-vendor-lookup
 - **Authentication:** python-jose (JWT) + bcrypt
 - **Configuration:** PyYAML
-- **Testing:** pytest with 474+ tests, 88% coverage
+- **Testing:** pytest with 520+ tests, 87% coverage
 - **REST API:** FastAPI with OpenAPI/Swagger UI
 - **Web Dashboard:** HTMX server-side dashboard at `/`
 - **Metrics:** Prometheus-compatible `/metrics` endpoint
@@ -462,7 +462,7 @@ btwf/
 │   ├── config.py             # YAML + env-var configuration
 │   ├── main.py               # CLI entry point
 │   └── ...                   # other scanners and modules
-├── tests/                    # 474+ unit tests, 88% coverage
+├── tests/                    # 520+ unit tests, 87% coverage
 ├── alembic/                  # DB migrations
 ├── docs/
 │   ├── adr/001-technology-choice.md
