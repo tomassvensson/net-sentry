@@ -5,8 +5,8 @@ import pytest
 from src.wifi_scanner import (
     WifiNetwork,
     _parse_iw_output,
-    _parse_nmcli_output,
     _parse_netsh_output,
+    _parse_nmcli_output,
     signal_dbm_to_percent,
     signal_percent_to_dbm,
 )

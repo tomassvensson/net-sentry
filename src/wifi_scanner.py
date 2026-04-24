@@ -364,8 +364,9 @@ def _build_iw_network(values: dict[str, object]) -> WifiNetwork | None:
         signal_percent = signal_dbm_to_percent(float(signal_dbm))
 
     channel = values.get("channel", 0)
-    if (not isinstance(channel, int) or channel == 0) and isinstance(values.get("frequency"), int):
-        channel = _frequency_to_channel(values["frequency"])
+    raw_freq = values.get("frequency")
+    if (not isinstance(channel, int) or channel == 0) and isinstance(raw_freq, int):
+        channel = _frequency_to_channel(raw_freq)
 
     security_markers = values.get("security_markers")
     privacy = values.get("privacy", False)
@@ -373,7 +374,7 @@ def _build_iw_network(values: dict[str, object]) -> WifiNetwork | None:
     authentication, encryption = _split_linux_security(security)
 
     return WifiNetwork(
-        ssid=values.get("ssid", "") if isinstance(values.get("ssid"), str) else "<Hidden>",
+        ssid=str(values.get("ssid") or "") if isinstance(values.get("ssid"), str) else "<Hidden>",
         bssid=normalized_bssid,
         network_type="Infrastructure",
         authentication=authentication,

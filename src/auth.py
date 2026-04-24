@@ -98,7 +98,7 @@ def create_access_token(
     payload = dict(data)
     expire = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
     payload["exp"] = expire
-    return cast(str, jose_jwt.encode(payload, secret, algorithm=algorithm))
+    return cast("str", jose_jwt.encode(payload, secret, algorithm=algorithm))
 
 
 def decode_access_token(token: str, secret: str, algorithm: str = "HS256") -> dict[str, Any]:
@@ -119,7 +119,7 @@ def decode_access_token(token: str, secret: str, algorithm: str = "HS256") -> di
     try:
         from jose import JWTError  # type: ignore[import-untyped]
 
-        return cast(dict[str, Any], jose_jwt.decode(token, secret, algorithms=[algorithm]))
+        return cast("dict[str, Any]", jose_jwt.decode(token, secret, algorithms=[algorithm]))
     except JWTError as exc:
         logger.debug("JWT decode error: %s", exc)
         raise HTTPException(
@@ -141,7 +141,7 @@ def verify_password(plain: str, hashed: str) -> bool:
     """
     bcrypt = _load_bcrypt()
     try:
-        return cast(bool, bcrypt.checkpw(plain.encode(), hashed.encode()))
+        return cast("bool", bcrypt.checkpw(plain.encode(), hashed.encode()))
     except Exception:
         logger.debug("bcrypt.checkpw failed", exc_info=True)
         return False
