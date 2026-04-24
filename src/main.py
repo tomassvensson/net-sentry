@@ -672,7 +672,9 @@ def _upsert_network_device(
         and arp_dev.ip_address
         and (rescan_ports or not device.open_ports)
     ):
-        logger.info("Port scanning %s (%s)…", arp_dev.ip_address, arp_dev.mac_address)
+        _mac = arp_dev.mac_address or ""
+        _masked = "**:**:**:**:" + ":".join(_mac.split(":")[-2:]) if _mac else "(unknown)"
+        logger.info("Port scanning %s (%s)…", arp_dev.ip_address, _masked)
         open_ports = scan_host_ports(
             arp_dev.ip_address,
             ports=config.port_scan.ports,
