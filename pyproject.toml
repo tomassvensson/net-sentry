@@ -19,6 +19,10 @@ dependencies = [
     "prometheus-client>=0.21.0",
     "paho-mqtt>=2.1.0",
     "slowapi>=0.1.9",
+    "python-jose[cryptography]>=3.3.0",
+    "bcrypt>=4.0",
+    "pysnmp-lextudio>=6.2",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +51,12 @@ monitor = [
 
 [project.scripts]
 btwifi = "src.main:main"
+
+# Entry-point group for third-party scanner plugins.
+# Third-party packages can register a ScannerPlugin subclass here.
+# Example:  my_scanner = "my_package.my_scanner:MyScanner"
+[project.entry-points."btwifi.scanners"]
+snmp = "src.snmp_scanner:SnmpScanner"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

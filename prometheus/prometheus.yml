@@ -1,0 +1,33 @@
+# prometheus/prometheus.yml
+# Sample Prometheus scrape configuration for BtWiFi.
+#
+# Usage:
+#   1. Copy (or mount) this file to your Prometheus config directory.
+#   2. Adjust the `targets` entry if BtWiFi runs on a different host/port.
+#   3. Start Prometheus with: prometheus --config.file=prometheus.yml
+#
+# Quick-start with Docker Compose (see the "dashboards" profile):
+#   docker compose --profile dashboards up
+#
+# The /metrics endpoint does NOT require authentication (even when API
+# auth is enabled) so that Prometheus can always scrape it.
+
+global:
+  scrape_interval: 15s       # How often to scrape targets.
+  evaluation_interval: 15s   # How often to evaluate alerting rules.
+  scrape_timeout: 10s
+
+scrape_configs:
+  # BtWiFi device tracker
+  - job_name: btwifi
+    static_configs:
+      - targets:
+          - btwifi:8000   # hostname inside Docker Compose network
+          # - localhost:8000  # when running outside Docker
+    metrics_path: /metrics
+
+  # Scrape Prometheus itself (optional, useful for debugging)
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090

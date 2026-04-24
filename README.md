@@ -14,31 +14,39 @@ BtWiFi uses multiple discovery protocols to scan for nearby wireless and network
 - **SSDP/UPnP Discovery** — Discovers UPnP devices on the network
 - **NetBIOS Name Resolution** — Resolves Windows/SMB device names
 - **ARP Network Discovery** — Discovers devices visible in the ARP table
+- **SNMP Scanner** — Queries network devices for system info via SNMPv2c
 - **Device Categorization** — Automatically categorizes devices (phone, laptop, IoT, router, etc.)
-- **Device Fingerprinting** — Identifies device type, OS, and model from multiple data sources
+- **Device Fingerprinting** — Identifies device type, OS, and model from multiple data sources with evidence-weighted confidence scoring
 - **Vendor Identification** — Translates MAC addresses to manufacturer names using the IEEE OUI database
-- **Visibility Tracking** — Stores when devices were first/last seen with signal strength
+- **Visibility Tracking** — Stores when devices were first/last seen with signal strength; detail page per device
+- **Data Retention** — Automatically purges old visibility windows with configurable retention period
+- **CSV/JSON Export** — Export device data via API endpoints or CLI flag
+- **JWT Authentication** — Optional token-based auth for all API/v1 endpoints
 - **Whitelist Management** — Tag known devices with custom names and trust levels
 - **Alert System** — Log alerts when new unknown devices appear on the network
+- **Scanner Plugin Interface** — Register third-party scanners via `btwifi.scanners` entry-points
 - **Continuous Scanning** — Run repeated scans with configurable intervals
 - **YAML Configuration** — Configure all scanner options through `config.yaml`
 - **Human-readable Output** — Displays results in a formatted table with categories and vendor names
-- **Docker Support** — Dockerfile and docker-compose.yml for containerized deployment
+- **Docker Support** — Dockerfile and docker-compose.yml with Prometheus/Grafana and PostgreSQL profiles
 
 ## Technology Stack
 
 - **Language:** Python 3.10+
-- **Database:** SQLite via SQLAlchemy
+- **Database:** SQLite (default) or PostgreSQL via SQLAlchemy + Alembic
 - **WiFi Scanning:** Windows Native WiFi API (`netsh`)
 - **Bluetooth Scanning:** Windows Bluetooth API via PowerShell
 - **ARP Discovery:** `ip neigh` (Linux) / `arp -a` (Windows)
 - **mDNS Discovery:** zeroconf library
+- **SNMP Scanning:** pysnmp-lextudio (SNMPv2c)
 - **OUI Lookup:** IEEE MA-L (OUI) database via mac-vendor-lookup
+- **Authentication:** python-jose (JWT) + bcrypt
 - **Configuration:** PyYAML
-- **Testing:** pytest with 324 tests, 96% coverage
+- **Testing:** pytest with 474+ tests, 88% coverage
 - **REST API:** FastAPI with OpenAPI/Swagger UI
 - **Web Dashboard:** HTMX server-side dashboard at `/`
 - **Metrics:** Prometheus-compatible `/metrics` endpoint
+- **Monitoring:** Grafana dashboard + Prometheus scrape config
 - **Linting:** ruff (lint + format)
 - **Type Checking:** mypy
 - **CI/CD:** GitHub Actions (lint, test matrix, Trivy, CodeQL)
@@ -281,5 +289,165 @@ curl http://localhost:8000/metrics
 The `/api/v1/devices` endpoint is rate-limited to **100 requests per minute**
 per IP address (via slowapi). Exceeding the limit returns HTTP `429 Too Many Requests`.
 
+### JWT Authentication
 
+Auth is **disabled by default**. Enable it in `config.yaml`:
+
+```yaml
+api:
+  auth_enabled: true
+  jwt_secret: "<long-random-string>"   # or set env var BTWIFI_JWT_SECRET
+  jwt_expire_minutes: 60
+  api_users:
+    admin: "$2b$12$..."   # bcrypt hash
+```
+
+Generate a password hash:
+
+```bash
+python -c "import bcrypt; print(bcrypt.hashpw(b'mypassword', bcrypt.gensalt()).decode())"
+```
+
+Obtain a token and use it:
+
+```bash
+# Login
+curl -X POST http://localhost:8000/api/v1/auth/token \
+     -d "username=admin&password=mypassword"
+
+# Use the token
+curl -H "Authorization: Bearer <token>" http://localhost:8000/api/v1/devices
+```
+
+### Data Export
+
+Export all devices to CSV or JSON via the API or the CLI.
+
+**API:**
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8000/api/v1/export/devices.csv -o devices.csv
+
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8000/api/v1/export/devices.json -o devices.json
+
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8000/api/v1/export/windows.csv -o windows.csv
+```
+
+**CLI:**
+
+```bash
+python -m src.main --export csv --output devices.csv
+python -m src.main --export json --output devices.json
+# Write to stdout
+python -m src.main --export csv --output -
+```
+
+### Data Retention
+
+Visibility windows older than `retention_days` are purged automatically once per day. Set `retention_days: 0` (default) to keep all data.
+
+```yaml
+database:
+  retention_days: 90   # purge windows older than 90 days (0 = keep forever)
+```
+
+SQLite databases are VACUUMed after purges that actually delete rows, to reclaim disk space.
+
+### Device Detail Page
+
+Each device has a detail page at `/devices/<mac_address>` showing all visibility windows in a paginated table. Links appear in the main dashboard.
+
+### SNMP Scanner
+
+The SNMP scanner queries devices on the network for system information using SNMPv2c. It is registered as a scanner plugin (entry point `btwifi.scanners`).
+
+```yaml
+snmp:
+  enabled: true
+  subnet: "192.168.1.0/24"
+  community: "public"
+  port: 161
+  timeout: 2
+  retries: 1
+  max_hosts: 254
+```
+
+Requires `pysnmp-lextudio` (installed via `pip install -e ".[dev]"` or `pip install pysnmp-lextudio`).
+
+### Scanner Plugins
+
+Third-party scanners can be registered via the `btwifi.scanners` entry-point group:
+
+```toml
+[project.entry-points."btwifi.scanners"]
+my_scanner = "mypackage.scanner:MyScanner"
+```
+
+Your class must subclass `src.scanner_plugin.ScannerPlugin` and implement `scan(config) -> list[ScanResult]`.
+
+### Prometheus & Grafana
+
+Start the monitoring stack:
+
+```bash
+docker compose --profile dashboards up -d
+```
+
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3000` (admin/admin)
+
+A pre-built BtWiFi dashboard is provisioned automatically from `grafana/provisioning/`.
+
+### PostgreSQL Backend
+
+Use PostgreSQL instead of SQLite for multi-instance or production deployments:
+
+```bash
+docker compose --profile postgres up -d
+```
+
+Then set `database.url` in `config.yaml`:
+
+```yaml
+database:
+  url: "postgresql://btwifi:btwifi@localhost:5432/btwifi"
+```
+
+See [docs/database-migrations.md](docs/database-migrations.md) for Alembic migration guidance.
+
+### Confidence Scoring
+
+Device fingerprints are scored using an evidence-weighted complement-product formula:
+
+$$confidence = 1 - \prod_{i}(1 - w_i)$$
+
+Each evidence item has a source, field, value, and weight (0–1). Multiple independent signals combine to increase confidence without capping at the weight of any single source.
+
+## Project Structure
+
+```
+btwf/
+├── src/
+│   ├── api.py                # FastAPI REST API + HTMX dashboard
+│   ├── auth.py               # JWT authentication
+│   ├── scanner_plugin.py     # Plugin interface + entry-point loader
+│   ├── snmp_scanner.py       # SNMP v2c network scanner
+│   ├── fingerprint.py        # Evidence-weighted device fingerprinting
+│   ├── database.py           # DB sessions + retention purge
+│   ├── config.py             # YAML + env-var configuration
+│   ├── main.py               # CLI entry point
+│   └── ...                   # other scanners and modules
+├── tests/                    # 474+ unit tests, 88% coverage
+├── alembic/                  # DB migrations
+├── docs/
+│   ├── adr/001-technology-choice.md
+│   └── database-migrations.md
+├── grafana/                  # Grafana dashboard provisioning
+├── docker-compose.yml        # Profiles: dashboards, postgres
+├── Dockerfile
+└── config.yaml.example
+```
 

@@ -19,3 +19,99 @@ services:
     devices:
       - /dev/bluetooth:/dev/bluetooth
     privileged: false
+
+  # -------------------------------------------------------------------------
+  # "dashboards" profile — Prometheus + Grafana
+  #
+  # Bring up dashboards:
+  #   docker compose --profile dashboards up
+  #
+  # Access:
+  #   Prometheus: http://localhost:9090
+  #   Grafana:    http://localhost:3000  (default login: admin / admin)
+  #
+  # BtWiFi metrics are at http://localhost:8000/metrics
+  # The Grafana dashboard is auto-provisioned from grafana/provisioning/
+  # -------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: btwifi-prometheus
+    profiles: [dashboards]
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    extra_hosts:
+      - "btwifi:host-gateway"  # allow Prometheus to reach BtWiFi on the host
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: btwifi-grafana
+    profiles: [dashboards]
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+
+  # -------------------------------------------------------------------------
+  # "postgres" profile — PostgreSQL for heavier usage
+  #
+  # Bring up with Postgres:
+  #   docker compose --profile postgres up
+  #
+  # Set the database URL in config.yaml or environment:
+  #   DATABASE_URL=postgresql+pg8000://btwifi:btwifi@localhost:5432/btwifi
+  #
+  # Access pgAdmin: http://localhost:5050  (admin@btwifi.local / admin)
+  # -------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: btwifi-postgres
+    profiles: [postgres]
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=btwifi
+      - POSTGRES_PASSWORD=btwifi
+      - POSTGRES_DB=btwifi
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U btwifi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:8.6
+    container_name: btwifi-pgadmin
+    profiles: [postgres]
+    restart: unless-stopped
+    ports:
+      - "5050:80"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@btwifi.local
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  postgres_data:
+  pgadmin_data:

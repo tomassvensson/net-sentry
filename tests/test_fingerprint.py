@@ -4,7 +4,9 @@ import pytest
 
 from src.fingerprint import (
     DeviceFingerprint,
+    FingerprintEvidence,
     _parse_os_string,
+    compute_confidence,
     fingerprint_from_hostname,
     fingerprint_from_mdns_txt,
     fingerprint_from_ssdp_server,
@@ -34,14 +36,16 @@ class TestDeviceFingerprint:
             manufacturer="Apple",
             device_model="MacBook Pro",
             services=["http"],
-            confidence=0.8,
         )
+        # Add evidence to fp2 so that merged confidence is non-zero
+        fp2.add_evidence("mdns", "device_model", "MacBook Pro", 0.8)
         fp1.merge(fp2)
         assert fp1.os_family == "macOS"  # not overwritten
         assert fp1.os_version == "14.2"
         assert fp1.manufacturer == "Apple"
         assert fp1.device_model == "MacBook Pro"
         assert "http" in fp1.services
+        # Confidence is derived from merged evidence
         assert fp1.confidence == pytest.approx(0.8)
 
     @pytest.mark.timeout(30)
@@ -193,6 +197,97 @@ class TestFingerprintFromHostname:
     def test_generic_hostname(self) -> None:
         fp = fingerprint_from_hostname("AA:BB:CC:DD:EE:FF", "just-a-hostname")
         assert fp.confidence == pytest.approx(0.0)
+
+
+class TestFingerprintEvidence:
+    """Tests for evidence-weighted confidence scoring."""
+
+    @pytest.mark.timeout(30)
+    def test_compute_confidence_empty(self) -> None:
+        """No evidence → confidence 0."""
+        assert compute_confidence([]) == pytest.approx(0.0)
+
+    @pytest.mark.timeout(30)
+    def test_compute_confidence_single(self) -> None:
+        """Single evidence item with weight w → confidence w."""
+        ev = FingerprintEvidence(source="mdns", field="device_model", value="iPhone", weight=0.8)
+        assert compute_confidence([ev]) == pytest.approx(0.8)
+
+    @pytest.mark.timeout(30)
+    def test_compute_confidence_two_independent(self) -> None:
+        """Two independent evidence items combine: 1 − (1−w1)(1−w2)."""
+        ev1 = FingerprintEvidence(source="mdns", field="device_model", value="iPhone", weight=0.8)
+        ev2 = FingerprintEvidence(source="hostname", field="manufacturer", value="Apple", weight=0.6)
+        expected = 1.0 - (1.0 - 0.8) * (1.0 - 0.6)
+        assert compute_confidence([ev1, ev2]) == pytest.approx(expected, abs=1e-6)
+
+    @pytest.mark.timeout(30)
+    def test_compute_confidence_capped_at_one(self) -> None:
+        """Confidence should never exceed 1.0."""
+        evs = [FingerprintEvidence(source="s", field="f", value="v", weight=0.99) for _ in range(5)]
+        result = compute_confidence(evs)
+        assert result <= 1.0
+
+    @pytest.mark.timeout(30)
+    def test_add_evidence_updates_confidence(self) -> None:
+        """add_evidence() appends and recomputes confidence immediately."""
+        fp = DeviceFingerprint(mac_address="AA:BB:CC:DD:EE:FF")
+        assert fp.confidence == pytest.approx(0.0)
+        fp.add_evidence("mdns", "device_model", "iPhone", 0.8)
+        assert fp.confidence == pytest.approx(0.8)
+        fp.add_evidence("hostname", "manufacturer", "Apple", 0.6)
+        expected = 1.0 - (1.0 - 0.8) * (1.0 - 0.6)
+        assert fp.confidence == pytest.approx(expected, abs=1e-6)
+
+    @pytest.mark.timeout(30)
+    def test_add_evidence_stores_evidence_items(self) -> None:
+        """add_evidence() stores each item in the evidence list."""
+        fp = DeviceFingerprint(mac_address="AA:BB:CC:DD:EE:FF")
+        fp.add_evidence("mdns", "device_model", "Galaxy S23", 0.7)
+        fp.add_evidence("hostname", "os_family", "Android", 0.5)
+        assert len(fp.evidence) == 2
+        assert fp.evidence[0].source == "mdns"
+        assert fp.evidence[1].source == "hostname"
+
+    @pytest.mark.timeout(30)
+    def test_merge_combines_evidence(self) -> None:
+        """merge() concatenates evidence lists from both fingerprints."""
+        fp1 = DeviceFingerprint(mac_address="AA:BB:CC:DD:EE:FF")
+        fp1.add_evidence("mdns", "device_model", "MacBook", 0.7)
+
+        fp2 = DeviceFingerprint(mac_address="AA:BB:CC:DD:EE:FF")
+        fp2.add_evidence("ssdp", "os_family", "macOS", 0.5)
+
+        fp1.merge(fp2)
+
+        # Both evidence items should be present
+        sources = {e.source for e in fp1.evidence}
+        assert "mdns" in sources
+        assert "ssdp" in sources
+
+    @pytest.mark.timeout(30)
+    def test_merge_recomputes_confidence(self) -> None:
+        """After merge(), confidence reflects all combined evidence."""
+        fp1 = DeviceFingerprint(mac_address="AA:BB:CC:DD:EE:FF")
+        fp1.add_evidence("mdns", "device_model", "MacBook", 0.7)
+        confidence_before = fp1.confidence
+
+        fp2 = DeviceFingerprint(mac_address="AA:BB:CC:DD:EE:FF")
+        fp2.add_evidence("ssdp", "os_family", "macOS", 0.5)
+
+        fp1.merge(fp2)
+
+        # Combined confidence must be higher (more evidence = higher certainty)
+        assert fp1.confidence > confidence_before
+
+    @pytest.mark.timeout(30)
+    def test_fingerprint_evidence_dataclass_fields(self) -> None:
+        """FingerprintEvidence stores all four fields correctly."""
+        ev = FingerprintEvidence(source="hostname", field="os_family", value="Linux", weight=0.4)
+        assert ev.source == "hostname"
+        assert ev.field == "os_family"
+        assert ev.value == "Linux"
+        assert ev.weight == pytest.approx(0.4)
 
 
 class TestParseOsString:

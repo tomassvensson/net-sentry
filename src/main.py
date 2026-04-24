@@ -4,6 +4,8 @@ Scans for WiFi networks, Bluetooth devices, and local network devices,
 then stores results in the database and displays a human-readable table.
 """
 
+import csv
+import json
 import logging
 import re
 import signal
@@ -918,7 +920,17 @@ def _print_device_table(rows: list[list[str]], headers: list[str]) -> None:
 
 
 def main() -> None:
-    """Main entry point."""
+    """Main entry point.
+
+    Supports an optional ``--export <csv|json>`` flag which dumps all known
+    devices to stdout and exits without running a scan.  Accepts an optional
+    ``--output <path>`` flag to write to a file instead of stdout.
+    """
+    # --- Export sub-command ---
+    if "--export" in sys.argv:
+        _run_cli_export()
+        return
+
     try:
         config = load_config()
 
@@ -956,3 +968,84 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------
+# CLI export helpers
+# ---------------------------------------------------------------------------
+
+_EXPORT_CSV_FIELDS = [
+    "mac_address",
+    "device_type",
+    "device_name",
+    "ssid",
+    "vendor",
+    "hostname",
+    "ip_address",
+    "category",
+    "is_whitelisted",
+    "reconnect_count",
+    "channel",
+    "authentication",
+    "encryption",
+    "radio_type",
+    "extra_info",
+    "created_at",
+    "updated_at",
+]
+
+
+def _run_cli_export() -> None:  # noqa: PLR0912
+    """Handle the ``--export`` CLI sub-command."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="btwifi --export",
+        description="Export device data to CSV or JSON.",
+    )
+    parser.add_argument(
+        "--export",
+        choices=["csv", "json"],
+        required=True,
+        help="Output format.",
+    )
+    parser.add_argument(
+        "--output",
+        default="-",
+        help="Output file path. Use '-' for stdout (default).",
+    )
+    args = parser.parse_args()
+
+    config = load_config()
+    engine = init_database(config.database.url)
+
+    with get_session(engine) as session:
+        from src.models import Device
+
+        devices = session.query(Device).order_by(Device.mac_address).all()
+
+        import contextlib
+        import io
+
+        with contextlib.ExitStack() as stack:
+            if args.output == "-":
+                buf: io.StringIO | io.TextIOWrapper = io.StringIO()
+            else:
+                buf = stack.enter_context(
+                    open(args.output, "w", newline="", encoding="utf-8")  # noqa: SIM115
+                )
+
+            if args.export == "csv":
+                writer = csv.DictWriter(buf, fieldnames=_EXPORT_CSV_FIELDS, extrasaction="ignore")
+                writer.writeheader()
+                for dev in devices:
+                    writer.writerow({f: (getattr(dev, f, None) or "") for f in _EXPORT_CSV_FIELDS})
+            else:
+                rows = [{f: str(getattr(dev, f, None) or "") for f in _EXPORT_CSV_FIELDS} for dev in devices]
+                json.dump(rows, buf, indent=2, default=str)
+                buf.write("\n")
+
+            if args.output == "-":
+                print(buf.getvalue())  # type: ignore[union-attr]
+            else:
+                logger.info("Exported %d devices to %s", len(devices), args.output)

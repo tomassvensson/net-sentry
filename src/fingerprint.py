@@ -3,6 +3,17 @@
 Combines information from different scan methods (mDNS TXT records,
 SSDP server strings, hostnames, vendor names) to build a richer
 device profile.
+
+Confidence scoring
+------------------
+Each piece of evidence carries a *weight* (0.0–1.0) representing how reliable
+it is.  The overall ``DeviceFingerprint.confidence`` is derived by combining
+all evidence weights via ``compute_confidence()``.  The combination rule is a
+Bayesian-style complement product so that independent weak signals can together
+produce a higher confidence than any single signal alone, while a single strong
+signal can already push it near 1.0:
+
+    confidence = 1 − ∏(1 − wᵢ)
 """
 
 import logging
@@ -10,6 +21,55 @@ import re
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Evidence tracking
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FingerprintEvidence:
+    """A single piece of evidence contributing to device identification.
+
+    Attributes:
+        source: Where the evidence came from (e.g. ``"mdns"``, ``"ssdp"``).
+        field: Which fingerprint field it informs (e.g. ``"os_family"``).
+        value: The raw observed value.
+        weight: Reliability weight in [0.0, 1.0].
+    """
+
+    source: str
+    field: str
+    value: str
+    weight: float
+
+
+def compute_confidence(evidence_list: list[FingerprintEvidence]) -> float:
+    """Compute overall confidence from a list of evidence items.
+
+    Uses the complement-product formula so that independent evidence items
+    reinforce each other:
+
+        confidence = 1 − ∏(1 − wᵢ)
+
+    Args:
+        evidence_list: List of ``FingerprintEvidence`` items.
+
+    Returns:
+        Float in [0.0, 1.0].
+    """
+    if not evidence_list:
+        return 0.0
+    complement = 1.0
+    for ev in evidence_list:
+        complement *= 1.0 - max(0.0, min(1.0, ev.weight))
+    return round(1.0 - complement, 4)
+
+
+# ---------------------------------------------------------------------------
+# Fingerprint model
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -22,12 +82,27 @@ class DeviceFingerprint:
     device_model: str = ""
     manufacturer: str = ""
     services: list[str] = field(default_factory=list)
-    confidence: float = 0.0  # 0.0 to 1.0
+    confidence: float = 0.0  # 0.0 to 1.0 — recomputed via compute_confidence()
+    evidence: list[FingerprintEvidence] = field(default_factory=list)
+
+    def add_evidence(self, source: str, fp_field: str, value: str, weight: float) -> None:
+        """Record an evidence item and update the confidence score.
+
+        Args:
+            source: Evidence source label (e.g. ``"mdns"``).
+            fp_field: Fingerprint field this evidence informs.
+            value: Observed raw value.
+            weight: Reliability weight in [0.0, 1.0].
+        """
+        self.evidence.append(FingerprintEvidence(source=source, field=fp_field, value=value, weight=weight))
+        self.confidence = compute_confidence(self.evidence)
 
     def merge(self, other: "DeviceFingerprint") -> None:
         """Merge another fingerprint's data into this one.
 
         Only fills in empty fields; does not overwrite existing data.
+        Evidence items from *other* are appended, and confidence is
+        recomputed from the combined evidence.
 
         Args:
             other: Fingerprint to merge from.
@@ -43,7 +118,9 @@ class DeviceFingerprint:
         for svc in other.services:
             if svc not in self.services:
                 self.services.append(svc)
-        self.confidence = max(self.confidence, other.confidence)
+        # Merge evidence and recompute confidence
+        self.evidence.extend(other.evidence)
+        self.confidence = compute_confidence(self.evidence)
 
 
 def fingerprint_from_mdns_txt(
@@ -72,13 +149,13 @@ def fingerprint_from_mdns_txt(
     if apple_model:
         fp.device_model = apple_model
         fp.manufacturer = "Apple"
-        fp.confidence = max(fp.confidence, 0.8)
+        fp.add_evidence("mdns", "device_model", apple_model, 0.8)
 
     # Model descriptor (e.g., "Synology DS920+")
     model = txt_records.get("md", "")
     if model:
         fp.device_model = model  # md is more descriptive, overrides am
-        fp.confidence = max(fp.confidence, 0.7)
+        fp.add_evidence("mdns", "device_model", model, 0.7)
 
     # Friendly name
     if txt_records.get("fn"):
@@ -90,7 +167,7 @@ def fingerprint_from_mdns_txt(
         family, version = _parse_os_string(os_info)
         fp.os_family = family
         fp.os_version = version
-        fp.confidence = max(fp.confidence, 0.6)
+        fp.add_evidence("mdns", "os_family", os_info, 0.6)
 
     if service_type:
         fp.services.append(service_type)
@@ -126,13 +203,13 @@ def fingerprint_from_ssdp_server(mac_address: str, server_string: str) -> Device
             if name_lower in ("linux", "windows", "darwin", "macos", "freebsd"):
                 fp.os_family = name
                 fp.os_version = version
-                fp.confidence = max(fp.confidence, 0.5)
+                fp.add_evidence("ssdp", "os_family", part, 0.5)
             elif "upnp" not in name_lower:
                 # Likely a product identifier
                 if not fp.manufacturer:
                     fp.manufacturer = name
                     fp.device_model = f"{name}/{version}"
-                    fp.confidence = max(fp.confidence, 0.4)
+                    fp.add_evidence("ssdp", "manufacturer", part, 0.4)
 
     return fp
 
@@ -169,18 +246,18 @@ def fingerprint_from_hostname(mac_address: str, hostname: str) -> DeviceFingerpr
             fp.manufacturer = "Apple"
             fp.device_model = model
             fp.os_family = "iOS" if model in ("iPhone", "iPad") else "macOS"
-            fp.confidence = 0.6
+            fp.add_evidence("hostname", "manufacturer", hostname, 0.6)
             return fp
 
     # Windows patterns
     if re.search(r"(desktop|laptop|pc)\b", hostname_lower):
         fp.os_family = "Windows"
-        fp.confidence = 0.3
+        fp.add_evidence("hostname", "os_family", hostname, 0.3)
 
     # Android
     if re.search(r"android", hostname_lower):
         fp.os_family = "Android"
-        fp.confidence = 0.5
+        fp.add_evidence("hostname", "os_family", hostname, 0.5)
 
     # Samsung Galaxy
     match = re.search(r"galaxy[-_\s]?(s\d+|a\d+|note\d+|z\w+)", hostname_lower)
@@ -188,13 +265,13 @@ def fingerprint_from_hostname(mac_address: str, hostname: str) -> DeviceFingerpr
         fp.manufacturer = "Samsung"
         fp.device_model = f"Galaxy {match.group(1).upper()}"
         fp.os_family = "Android"
-        fp.confidence = 0.7
+        fp.add_evidence("hostname", "device_model", hostname, 0.7)
 
     # Synology
     if re.search(r"(diskstation|ds\d{3,4}|synology)", hostname_lower):
         fp.manufacturer = "Synology"
         fp.os_family = "DSM"
-        fp.confidence = 0.7
+        fp.add_evidence("hostname", "manufacturer", hostname, 0.7)
 
     return fp
 

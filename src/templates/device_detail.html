@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ device.device_name or device.mac_address }} — BtWiFi</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --surface: #16213e;
+            --primary: #0f3460;
+            --accent: #e94560;
+            --text: #eee;
+            --text-dim: #999;
+            --success: #4caf50;
+            --warning: #ff9800;
+            --border: #2a2a4a;
+        }
+        [data-theme="light"] {
+            --bg: #f5f5f5;
+            --surface: #fff;
+            --primary: #1565c0;
+            --accent: #d32f2f;
+            --text: #222;
+            --text-dim: #666;
+            --success: #2e7d32;
+            --warning: #f57c00;
+            --border: #ddd;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+        .header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 1.2rem; }
+        .breadcrumb { font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.3rem; }
+        .breadcrumb a { color: var(--accent); text-decoration: none; }
+        .container { max-width: 1200px; margin: 1.5rem auto; padding: 0 1rem; }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.2rem 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .card h2 { font-size: 1rem; margin-bottom: 1rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
+        .meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.8rem; }
+        .meta-item label { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; display: block; margin-bottom: 0.2rem; }
+        .meta-item span { font-size: 0.9rem; font-family: monospace; }
+        .badge {
+            display: inline-block; padding: 0.2em 0.6em; border-radius: 4px;
+            font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+        }
+        .badge-wifi { background: #1565c0; color: #fff; }
+        .badge-bluetooth { background: #5c35a8; color: #fff; }
+        .badge-network { background: #2e7d32; color: #fff; }
+        .badge-ssdp { background: #b07d0a; color: #fff; }
+        .badge-mdns { background: #0a6b80; color: #fff; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 0.6rem 0.8rem; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+        th { background: var(--primary); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        .signal-good { color: var(--success); }
+        .signal-fair { color: var(--warning); }
+        .signal-weak { color: var(--accent); }
+        .pagination { display: flex; gap: 0.4rem; justify-content: center; padding: 0.8rem 0; }
+        .btn {
+            padding: 0.4rem 0.8rem; border: 1px solid var(--border); border-radius: 4px;
+            background: var(--primary); color: var(--text); cursor: pointer; font-size: 0.85rem; text-decoration: none;
+        }
+        .btn:hover { opacity: 0.85; }
+        .btn.active { background: var(--accent); border-color: var(--accent); }
+        .export-links { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+        .theme-btn { cursor: pointer; background: none; border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 0.3rem 0.7rem; font-size: 0.8rem; }
+    </style>
+</head>
+<body>
+<div class="header">
+    <div>
+        <div class="breadcrumb"><a href="/">← Back to Dashboard</a></div>
+        <h1>Device Detail</h1>
+    </div>
+    <button class="theme-btn" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'">
+        Toggle theme
+    </button>
+</div>
+
+<div class="container">
+    <!-- Device metadata card -->
+    <div class="card">
+        <h2>Device Info</h2>
+        <div class="meta-grid">
+            <div class="meta-item">
+                <label>MAC Address</label>
+                <span>{{ device.mac_address }}</span>
+            </div>
+            <div class="meta-item">
+                <label>Type</label>
+                <span>
+                    {% if 'wifi' in device.device_type %}
+                    <span class="badge badge-wifi">{{ device.device_type }}</span>
+                    {% elif 'bluetooth' in device.device_type %}
+                    <span class="badge badge-bluetooth">{{ device.device_type }}</span>
+                    {% elif device.device_type == 'ssdp' %}
+                    <span class="badge badge-ssdp">{{ device.device_type }}</span>
+                    {% elif device.device_type == 'mdns' %}
+                    <span class="badge badge-mdns">{{ device.device_type }}</span>
+                    {% else %}
+                    <span class="badge badge-network">{{ device.device_type }}</span>
+                    {% endif %}
+                </span>
+            </div>
+            {% if device.device_name or device.ssid %}
+            <div class="meta-item">
+                <label>Name / SSID</label>
+                <span>{{ device.device_name or device.ssid }}</span>
+            </div>
+            {% endif %}
+            {% if device.vendor %}
+            <div class="meta-item">
+                <label>Vendor</label>
+                <span>{{ device.vendor }}</span>
+            </div>
+            {% endif %}
+            {% if device.hostname %}
+            <div class="meta-item">
+                <label>Hostname</label>
+                <span>{{ device.hostname }}</span>
+            </div>
+            {% endif %}
+            {% if device.ip_address %}
+            <div class="meta-item">
+                <label>IP Address</label>
+                <span>{{ device.ip_address }}</span>
+            </div>
+            {% endif %}
+            {% if device.category %}
+            <div class="meta-item">
+                <label>Category</label>
+                <span>{{ device.category }}</span>
+            </div>
+            {% endif %}
+            {% if device.channel %}
+            <div class="meta-item">
+                <label>Channel</label>
+                <span>{{ device.channel }}</span>
+            </div>
+            {% endif %}
+            <div class="meta-item">
+                <label>Reconnects</label>
+                <span>{{ device.reconnect_count }}</span>
+            </div>
+            <div class="meta-item">
+                <label>First Seen (ever)</label>
+                <span>{{ device.created_at }}</span>
+            </div>
+            <div class="meta-item">
+                <label>Last Updated</label>
+                <span>{{ device.updated_at }}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Visibility windows card -->
+    <div class="card">
+        <h2>Visibility Windows ({{ total_windows }} total)</h2>
+        <div class="export-links">
+            <a class="btn" href="/api/v1/export/windows.csv?mac_address={{ device.mac_address }}">⬇ CSV</a>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>First Seen</th>
+                    <th>Last Seen</th>
+                    <th>Duration</th>
+                    <th>Signal (avg)</th>
+                    <th>Signal (min)</th>
+                    <th>Signal (max)</th>
+                    <th>Scan Count</th>
+                </tr>
+            </thead>
+            <tbody id="windows-table-body"
+                   hx-get="/api/v1/devices/{{ device.mac_address }}/windows-table?page={{ page }}"
+                   hx-trigger="load"
+                   hx-swap="innerHTML">
+                {% include "windows_table.html" %}
+            </tbody>
+        </table>
+    </div>
+</div>
+</body>
+</html>

@@ -101,9 +101,19 @@ class TestPostgresTableCreation:
         inspector = inspect(pg_engine)
         cols = {c["name"] for c in inspector.get_columns("devices")}
         required = {
-            "id", "mac_address", "device_type", "vendor", "device_name",
-            "ssid", "hostname", "ip_address", "category", "is_whitelisted",
-            "reconnect_count", "created_at", "updated_at",
+            "id",
+            "mac_address",
+            "device_type",
+            "vendor",
+            "device_name",
+            "ssid",
+            "hostname",
+            "ip_address",
+            "category",
+            "is_whitelisted",
+            "reconnect_count",
+            "created_at",
+            "updated_at",
         }
         assert required.issubset(cols), f"Missing columns: {required - cols}"
 
@@ -170,11 +180,7 @@ class TestPostgresCRUD:
             session.add(window)
             session.flush()
 
-            loaded = (
-                session.query(VisibilityWindow)
-                .filter_by(mac_address="AA:BB:CC:DD:EE:03")
-                .first()
-            )
+            loaded = session.query(VisibilityWindow).filter_by(mac_address="AA:BB:CC:DD:EE:03").first()
             assert loaded is not None
             assert loaded.signal_strength_dbm == pytest.approx(-65.0)
             assert loaded.scan_count == 1
@@ -202,11 +208,7 @@ class TestPostgresCRUD:
                 )
             session.flush()
 
-            count = (
-                session.query(VisibilityWindow)
-                .filter_by(mac_address="AA:BB:CC:DD:EE:04")
-                .count()
-            )
+            count = session.query(VisibilityWindow).filter_by(mac_address="AA:BB:CC:DD:EE:04").count()
             assert count == 3
 
     @pytest.mark.timeout(120)

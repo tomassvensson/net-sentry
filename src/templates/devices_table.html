@@ -1,6 +1,6 @@
 {% for item in devices %}
 <tr>
-    <td><code>{{ item.device.mac_address }}</code></td>
+    <td><a href="/devices/{{ item.device.mac_address }}" style="color:inherit;text-decoration:underline dotted;"><code>{{ item.device.mac_address }}</code></a></td>
     <td>
         {% if 'wifi' in item.device.device_type %}
         <span class="badge badge-wifi">{{ item.device.device_type }}</span>

@@ -3,19 +3,27 @@
 Provides:
 - HTMX-powered web dashboard at /
 - REST API at /api/v1/ for device history and management
-- Prometheus metrics at /metrics
+- Prometheus metrics at /metrics (GET, no auth required)
 - Health check at /api/v1/health
+- JWT auth on /api/v1/* when api.auth_enabled=true (default: disabled)
+- CORS middleware (configurable via api.cors_origins in config)
+- CSV/JSON export at /api/v1/export/*
+- Device detail page at /devices/{mac}
 """
 
+import csv
+import io
+import json
 import logging
 from collections.abc import AsyncGenerator, Generator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi import APIRouter, Depends, FastAPI, Form, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from prometheus_client import generate_latest
@@ -29,7 +37,8 @@ from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
 from starlette.types import ASGIApp
 
-from src.database import get_session, init_database
+from src.auth import configure_auth, require_auth
+from src.database import get_session, init_database, purge_old_windows
 from src.models import Device, VisibilityWindow
 
 logger = logging.getLogger(__name__)
@@ -70,7 +79,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Application lifespan: initialize DB on startup."""
+    """Application lifespan: initialize DB, start background jobs on startup."""
+    import asyncio
+
     global _engine  # noqa: PLW0603
     if _engine is None:
         try:
@@ -78,8 +89,72 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception:
             logger.exception("Failed to initialize database in API lifespan")
     logger.info("API server started, database initialized")
+
+    # Start background data-retention/vacuum job
+    task = asyncio.create_task(_retention_task())
+
     yield
+
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
     logger.info("API server shutting down")
+
+
+async def _retention_task() -> None:
+    """Background task: purge old visibility windows once per day."""
+    import asyncio
+
+    _interval_seconds = 86_400  # run once per day
+    while True:
+        await asyncio.sleep(_interval_seconds)
+        if _engine is None:
+            continue
+        try:
+            from src.config import load_config
+
+            cfg = load_config()
+            retention_days = cfg.database.retention_days
+            if retention_days > 0:
+                deleted = purge_old_windows(_engine, retention_days)
+                logger.info("Retention job: purged %d windows (retention=%d days)", deleted, retention_days)
+        except Exception:
+            logger.exception("Retention task encountered an error")
+
+
+def set_engine(engine: Any) -> None:
+    """Set the database engine (used in tests and from main)."""
+    global _engine  # noqa: PLW0603
+    _engine = engine
+
+
+def configure_app(config: Any) -> None:
+    """Apply runtime config to the running FastAPI app (CORS, auth).
+
+    Called by the launcher (main.py / uvicorn startup) after loading config.
+
+    Args:
+        config: AppConfig instance.
+    """
+    configure_auth(
+        enabled=config.api.auth_enabled,
+        secret=config.api.jwt_secret,
+        algorithm=config.api.jwt_algorithm,
+        expire_minutes=config.api.jwt_expire_minutes,
+        users=config.api.api_users,
+    )
+    # Rebuild CORS middleware with the configured origins.
+    # FastAPI middleware stack is built at startup; we add CORS once here.
+    # For tests the defaults (allow localhost) are fine.
+    origins = config.api.cors_origins or ["http://localhost", "http://127.0.0.1"]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
+    logger.info("CORS origins: %s", origins)
 
 
 app = FastAPI(
@@ -172,6 +247,7 @@ def list_devices(
     page_size: int = Query(50, ge=1, le=200, description="Items per page"),
     device_type: str | None = Query(None, description="Filter by device type"),
     session: Session = Depends(get_db),
+    _user: str | None = Depends(require_auth),
 ) -> dict[str, Any]:
     """List all known devices with pagination.
 
@@ -207,6 +283,7 @@ def get_device(
     request: Request,
     mac_address: str,
     session: Session = Depends(get_db),
+    _user: str | None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Get device details by MAC address.
 
@@ -242,6 +319,7 @@ def get_device_windows(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     session: Session = Depends(get_db),
+    _user: str | None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Get visibility windows for a device.
 
@@ -275,7 +353,11 @@ def get_device_windows(
 # ---------------------------------------------------------------------------
 @v1.get("/summary")
 @limiter.limit("60/minute")
-def get_summary(request: Request, session: Session = Depends(get_db)) -> dict[str, Any]:
+def get_summary(
+    request: Request,
+    session: Session = Depends(get_db),
+    _user: str | None = Depends(require_auth),
+) -> dict[str, Any]:
     """Get an overview of the device database.
 
     Args:
@@ -395,6 +477,267 @@ def devices_table_fragment(
     )
 
 
+# ---------------------------------------------------------------------------
+# Device detail page (visibility windows UI)
+# ---------------------------------------------------------------------------
+@app.get("/devices/{mac_address}", response_class=HTMLResponse)
+def device_detail_page(
+    request: Request,
+    mac_address: str,
+    page: int = Query(1, ge=1),
+    session: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Render the device detail page showing all visibility windows.
+
+    Args:
+        request: FastAPI request.
+        mac_address: Device MAC address.
+        page: Page number for visibility windows.
+        session: Database session.
+
+    Returns:
+        Rendered HTML device detail page.
+    """
+    device = session.query(Device).filter_by(mac_address=mac_address).first()
+    if device is None:
+        return HTMLResponse(content="<h1>Device not found</h1>", status_code=404)
+
+    page_size = 20
+    windows_query = (
+        session.query(VisibilityWindow).filter_by(mac_address=mac_address).order_by(VisibilityWindow.last_seen.desc())
+    )
+    total_windows = windows_query.count()
+    windows = windows_query.offset((page - 1) * page_size).limit(page_size).all()
+    pages = (total_windows + page_size - 1) // page_size if page_size else 1
+
+    return templates.TemplateResponse(
+        request=request,
+        name="device_detail.html",
+        context={
+            "device": device,
+            "windows": windows,
+            "page": page,
+            "pages": pages,
+            "total_windows": total_windows,
+            "now": datetime.now(timezone.utc),
+        },
+    )
+
+
+@v1.get("/devices/{mac_address}/windows-table", response_class=HTMLResponse)
+def windows_table_fragment(
+    request: Request,
+    mac_address: str,
+    page: int = Query(1, ge=1),
+    session: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX fragment: visibility windows table rows for a device.
+
+    Args:
+        request: FastAPI request.
+        mac_address: Device MAC address.
+        page: Page number.
+        session: Database session.
+
+    Returns:
+        HTML table rows fragment.
+    """
+    page_size = 20
+    windows_query = (
+        session.query(VisibilityWindow).filter_by(mac_address=mac_address).order_by(VisibilityWindow.last_seen.desc())
+    )
+    total_windows = windows_query.count()
+    windows = windows_query.offset((page - 1) * page_size).limit(page_size).all()
+    pages = (total_windows + page_size - 1) // page_size if page_size else 1
+
+    return templates.TemplateResponse(
+        request=request,
+        name="windows_table.html",
+        context={
+            "mac_address": mac_address,
+            "windows": windows,
+            "page": page,
+            "pages": pages,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Auth endpoints
+# ---------------------------------------------------------------------------
+@v1.post("/auth/token")
+@limiter.limit("10/minute")
+def login(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+) -> dict[str, Any]:
+    """Obtain a JWT access token (OAuth2 password flow).
+
+    Only available when ``api.auth_enabled=true``.  When auth is disabled
+    (default), this endpoint still responds but issues tokens that are
+    ignored by protected endpoints.
+
+    Args:
+        request: FastAPI request (required by rate limiter).
+        username: API username.
+        password: Plain-text password.
+
+    Returns:
+        ``{"access_token": "...", "token_type": "bearer"}``
+    """
+    from src.auth import (
+        _jwt_algorithm,
+        _jwt_secret,
+        authenticate_user,
+        create_access_token,
+        get_jwt_expire_minutes,
+    )
+
+    if not authenticate_user(username, password):
+        from fastapi import HTTPException, status
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = create_access_token(
+        {"sub": username},
+        secret=_jwt_secret,
+        algorithm=_jwt_algorithm,
+        expires_minutes=get_jwt_expire_minutes(),
+    )
+    return {"access_token": token, "token_type": "bearer"}
+
+
+# ---------------------------------------------------------------------------
+# Export endpoints
+# ---------------------------------------------------------------------------
+
+_DEVICE_CSV_FIELDS = [
+    "id",
+    "mac_address",
+    "device_type",
+    "vendor",
+    "device_name",
+    "ssid",
+    "hostname",
+    "ip_address",
+    "category",
+    "is_whitelisted",
+    "reconnect_count",
+    "created_at",
+    "updated_at",
+]
+
+_WINDOW_CSV_FIELDS = [
+    "id",
+    "mac_address",
+    "first_seen",
+    "last_seen",
+    "signal_strength_dbm",
+    "min_signal_dbm",
+    "max_signal_dbm",
+    "scan_count",
+]
+
+
+@v1.get("/export/devices.csv")
+@limiter.limit("20/minute")
+def export_devices_csv(
+    request: Request,
+    session: Session = Depends(get_db),
+    _user: str | None = Depends(require_auth),
+) -> StreamingResponse:
+    """Export all devices as CSV.
+
+    Args:
+        request: FastAPI request.
+        session: Database session.
+        _user: Authenticated user (or None if auth disabled).
+
+    Returns:
+        Streaming CSV response.
+    """
+    devices = session.query(Device).order_by(Device.updated_at.desc()).all()
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=_DEVICE_CSV_FIELDS, extrasaction="ignore")
+    writer.writeheader()
+    for d in devices:
+        writer.writerow({f: getattr(d, f, "") for f in _DEVICE_CSV_FIELDS})
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=devices.csv"},
+    )
+
+
+@v1.get("/export/devices.json")
+@limiter.limit("20/minute")
+def export_devices_json(
+    request: Request,
+    session: Session = Depends(get_db),
+    _user: str | None = Depends(require_auth),
+) -> StreamingResponse:
+    """Export all devices as JSON.
+
+    Args:
+        request: FastAPI request.
+        session: Database session.
+        _user: Authenticated user (or None if auth disabled).
+
+    Returns:
+        Streaming JSON response.
+    """
+    devices = session.query(Device).order_by(Device.updated_at.desc()).all()
+    data = [_serialize_device(d) for d in devices]
+    content = json.dumps(data, indent=2, default=str)
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=devices.json"},
+    )
+
+
+@v1.get("/export/windows.csv")
+@limiter.limit("20/minute")
+def export_windows_csv(
+    request: Request,
+    mac_address: str | None = Query(None, description="Filter by MAC address"),
+    session: Session = Depends(get_db),
+    _user: str | None = Depends(require_auth),
+) -> StreamingResponse:
+    """Export visibility windows as CSV.
+
+    Args:
+        request: FastAPI request.
+        mac_address: Optional filter by device MAC.
+        session: Database session.
+        _user: Authenticated user (or None if auth disabled).
+
+    Returns:
+        Streaming CSV response.
+    """
+    query = session.query(VisibilityWindow)
+    if mac_address:
+        query = query.filter_by(mac_address=mac_address)
+    windows = query.order_by(VisibilityWindow.last_seen.desc()).all()
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=_WINDOW_CSV_FIELDS, extrasaction="ignore")
+    writer.writeheader()
+    for w in windows:
+        writer.writerow({f: getattr(w, f, "") for f in _WINDOW_CSV_FIELDS})
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=windows.csv"},
+    )
+
+
 # Register all v1 routes with the app
 app.include_router(v1)
 
@@ -433,13 +776,3 @@ def _serialize_window(window: VisibilityWindow) -> dict[str, Any]:
         "max_signal_dbm": window.max_signal_dbm,
         "scan_count": window.scan_count,
     }
-
-
-def set_engine(engine: Any) -> None:
-    """Set the database engine for the API (used when embedding in scanner).
-
-    Args:
-        engine: SQLAlchemy Engine.
-    """
-    global _engine  # noqa: PLW0603
-    _engine = engine

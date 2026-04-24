@@ -4,6 +4,7 @@ import logging
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Column, Engine, create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -142,3 +143,42 @@ def get_session(engine: Engine) -> Generator[Session, None, None]:
         raise
     finally:
         session.close()
+
+
+def purge_old_windows(engine: Engine, retention_days: int) -> int:
+    """Delete visibility windows older than ``retention_days`` days.
+
+    When ``retention_days`` is 0 (the default), nothing is deleted.
+
+    After deletion, VACUUM is run on SQLite databases to reclaim space.
+
+    Args:
+        engine: SQLAlchemy Engine instance.
+        retention_days: Number of days to keep.  0 = keep forever.
+
+    Returns:
+        Number of rows deleted.
+    """
+    if retention_days <= 0:
+        return 0
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    deleted = 0
+
+    with engine.begin() as conn:
+        result = conn.execute(
+            text("DELETE FROM visibility_windows WHERE last_seen < :cutoff"),
+            {"cutoff": cutoff},
+        )
+        deleted = result.rowcount
+
+    if deleted:
+        logger.info("Purged %d visibility windows older than %d days", deleted, retention_days)
+
+    # Reclaim space in SQLite only when rows were actually removed
+    if deleted and "sqlite" in engine.dialect.name.lower():
+        with engine.begin() as conn:
+            conn.execute(text("VACUUM"))
+        logger.debug("SQLite VACUUM completed after purge")
+
+    return deleted

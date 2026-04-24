@@ -202,8 +202,7 @@ class TestLoadOuiCsv:
         import src.oui_lookup as oui_mod
 
         csv_content = (
-            "Registry,Assignment,Organization Name,Organization Address\n"
-            "MA-L,AABBCC,TestCorp Ltd.,Testville TS US\n"
+            "Registry,Assignment,Organization Name,Organization Address\nMA-L,AABBCC,TestCorp Ltd.,Testville TS US\n"
         )
         csv_file = tmp_path / "oui.csv"
         csv_file.write_text(csv_content, encoding="utf-8")

@@ -1,0 +1,47 @@
+{% for w in windows %}
+<tr>
+    <td>{{ w.first_seen }}</td>
+    <td>{{ w.last_seen }}</td>
+    <td>
+        {% set duration_seconds = (w.last_seen - w.first_seen).total_seconds() %}
+        {% if duration_seconds < 60 %}
+            {{ duration_seconds | int }}s
+        {% elif duration_seconds < 3600 %}
+            {{ (duration_seconds / 60) | int }}m {{ (duration_seconds % 60) | int }}s
+        {% else %}
+            {{ (duration_seconds / 3600) | int }}h {{ ((duration_seconds % 3600) / 60) | int }}m
+        {% endif %}
+    </td>
+    <td>
+        {% if w.signal_strength_dbm is not none %}
+            {% if w.signal_strength_dbm > -50 %}
+            <span class="signal-good">{{ w.signal_strength_dbm }} dBm</span>
+            {% elif w.signal_strength_dbm > -70 %}
+            <span class="signal-fair">{{ w.signal_strength_dbm }} dBm</span>
+            {% else %}
+            <span class="signal-weak">{{ w.signal_strength_dbm }} dBm</span>
+            {% endif %}
+        {% else %}-{% endif %}
+    </td>
+    <td>{% if w.min_signal_dbm is not none %}{{ w.min_signal_dbm }} dBm{% else %}-{% endif %}</td>
+    <td>{% if w.max_signal_dbm is not none %}{{ w.max_signal_dbm }} dBm{% else %}-{% endif %}</td>
+    <td>{{ w.scan_count }}</td>
+</tr>
+{% endfor %}
+
+{% if pages > 1 %}
+<tr>
+    <td colspan="7">
+        <div class="pagination">
+            {% for p in range(1, pages + 1) %}
+            <button class="btn {% if p == page %}active{% endif %}"
+                    hx-get="/api/v1/devices/{{ mac_address }}/windows-table?page={{ p }}"
+                    hx-target="#windows-table-body"
+                    hx-swap="innerHTML">
+                {{ p }}
+            </button>
+            {% endfor %}
+        </div>
+    </td>
+</tr>
+{% endif %}

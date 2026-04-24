@@ -71,6 +71,8 @@ class DatabaseConfig:
     """Database configuration."""
 
     url: str = "sqlite:///btwifi.db"
+    retention_days: int = 0  # 0 = keep forever
+    vacuum_on_cleanup: bool = True
 
 
 @dataclass
@@ -116,11 +118,30 @@ class MonitorModeConfig:
 
 @dataclass
 class ApiConfig:
-    """Web API and dashboard settings."""
+    """Web API and dashboard settings.
+
+    Auth defaults (auth_enabled=False):
+    - All endpoints are public.
+    - Set auth_enabled=True and jwt_secret to protect /api/v1/* endpoints.
+    - Obtain a token via POST /api/v1/auth/token with {username, password}.
+    - Use Authorization: Bearer <token> header on subsequent requests.
+
+    CORS defaults (cors_origins=["http://localhost", "http://127.0.0.1"]):
+    - Override with a comma-separated list or a YAML list in config.yaml.
+    - Set cors_origins=["*"] only for fully public deployments.
+    """
 
     enabled: bool = True
     host: str = "0.0.0.0"
     port: int = 8000
+    auth_enabled: bool = False
+    jwt_secret: str = "change-me-in-production-use-env-var"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 60
+    # username -> bcrypt-hashed password; add entries to protect the API.
+    # Generate a hash: python -c "import bcrypt; print(bcrypt.hashpw(b'pass', bcrypt.gensalt()).decode())"
+    api_users: dict[str, str] = field(default_factory=dict)
+    cors_origins: list[str] = field(default_factory=lambda: ["http://localhost", "http://127.0.0.1"])
 
 
 @dataclass
@@ -253,8 +274,11 @@ def _parse_raw_config(raw: dict) -> AppConfig:
         )
 
     if "database" in raw:
+        db = raw["database"]
         config.database = DatabaseConfig(
-            url=raw["database"].get("url", config.database.url),
+            url=db.get("url", config.database.url),
+            retention_days=db.get("retention_days", config.database.retention_days),
+            vacuum_on_cleanup=db.get("vacuum_on_cleanup", config.database.vacuum_on_cleanup),
         )
 
     if "alert" in raw:
@@ -303,6 +327,12 @@ def _parse_raw_config(raw: dict) -> AppConfig:
             enabled=ap.get("enabled", config.api.enabled),
             host=ap.get("host", config.api.host),
             port=ap.get("port", config.api.port),
+            auth_enabled=ap.get("auth_enabled", config.api.auth_enabled),
+            jwt_secret=ap.get("jwt_secret", config.api.jwt_secret),
+            jwt_algorithm=ap.get("jwt_algorithm", config.api.jwt_algorithm),
+            jwt_expire_minutes=ap.get("jwt_expire_minutes", config.api.jwt_expire_minutes),
+            api_users=ap.get("api_users", config.api.api_users),
+            cors_origins=ap.get("cors_origins", config.api.cors_origins),
         )
 
     if "mqtt" in raw:
@@ -339,6 +369,15 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
     """
     if db_url := os.environ.get("DATABASE_URL"):
         config.database.url = db_url
+
+    if jwt_secret := os.environ.get("BTWIFI_JWT_SECRET"):
+        config.api.jwt_secret = jwt_secret
+
+    if cors := os.environ.get("BTWIFI_CORS_ORIGINS"):
+        config.api.cors_origins = [o.strip() for o in cors.split(",") if o.strip()]
+
+    if auth_enabled := os.environ.get("BTWIFI_AUTH_ENABLED"):
+        config.api.auth_enabled = auth_enabled.lower() in ("1", "true", "yes")
 
     if interval := os.environ.get("BTWIFI_SCAN_INTERVAL"):
         try:
