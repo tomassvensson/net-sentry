@@ -9,6 +9,6 @@ bcrypt>=4.0
 bleak>=0.22.3
 pysnmp>=6.2
 python-multipart>=0.0.9
-python-json-logger>=2.0
+python-json-logger>=3.0
 opentelemetry-sdk>=1.20
 opentelemetry-instrumentation-fastapi>=0.41b0
