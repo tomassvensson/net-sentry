@@ -20,7 +20,7 @@ class TestMqttPublisherInit:
         pub = MqttPublisher()
         assert pub._broker_host == "localhost"
         assert pub._broker_port == 1883
-        assert pub._topic_prefix == "btwifi"
+        assert pub._topic_prefix == "net-sentry"
         assert pub._connected is False
 
     @patch("src.mqtt_publisher.mqtt")

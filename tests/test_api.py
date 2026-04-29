@@ -117,7 +117,7 @@ class TestPrometheusMetrics:
 
         resp = client.get("/metrics")
         assert resp.status_code == 200
-        assert "btwifi" in resp.text
+        assert "net_sentry" in resp.text
 
 
 class TestListDevices:
@@ -217,7 +217,7 @@ class TestDashboard:
     def test_dashboard_renders(self, client) -> None:
         resp = client.get("/")
         assert resp.status_code == 200
-        assert "BtWiFi" in resp.text
+        assert "Net Sentry" in resp.text
 
     @pytest.mark.timeout(30)
     def test_dashboard_with_data(self, seeded_client) -> None:

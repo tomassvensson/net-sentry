@@ -114,7 +114,7 @@ class TestAlertManager:
             is_whitelisted=False,
         )
 
-        for handler in logging.getLogger("btwifi.alerts").handlers:
+        for handler in logging.getLogger("net_sentry.alerts").handlers:
             handler.flush()
 
         assert "AA:BB:CC:DD:EE:FF" not in caplog.text
@@ -125,3 +125,31 @@ class TestAlertManager:
         assert "AA:BB:CC:DD:EE:FF" not in alert_log
         assert "Office Sensor" not in alert_log
         assert "Acme Corp" not in alert_log
+
+    @pytest.mark.timeout(30)
+    def test_cooldown_suppresses_repeated_alerts(self) -> None:
+        """The same MAC should not trigger a second alert within the cooldown window."""
+        config = AlertConfig(enabled=True, log_new_devices=False, cooldown_seconds=300)
+        mgr = AlertManager(config)
+        mgr.on_new_device(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap")
+        mgr.on_new_device(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap")
+        assert mgr.alert_count == 1, "Duplicate alert within cooldown window should be suppressed"
+
+    @pytest.mark.timeout(30)
+    def test_cooldown_zero_allows_every_alert(self) -> None:
+        """With cooldown_seconds=0 every call must fire an alert."""
+        config = AlertConfig(enabled=True, log_new_devices=False, cooldown_seconds=0)
+        mgr = AlertManager(config)
+        mgr.on_new_device(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap")
+        mgr.on_new_device(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap")
+        assert mgr.alert_count == 2
+
+    @pytest.mark.timeout(30)
+    def test_cooldown_different_macs_are_independent(self) -> None:
+        """Cooldown is per-MAC; different MACs should each get their own alert."""
+        config = AlertConfig(enabled=True, log_new_devices=False, cooldown_seconds=300)
+        mgr = AlertManager(config)
+        mgr.on_new_device(mac_address="AA:BB:CC:DD:EE:01", device_type="wifi_ap")
+        mgr.on_new_device(mac_address="AA:BB:CC:DD:EE:02", device_type="wifi_ap")
+        mgr.on_new_device(mac_address="AA:BB:CC:DD:EE:01", device_type="wifi_ap")  # duplicate
+        assert mgr.alert_count == 2
