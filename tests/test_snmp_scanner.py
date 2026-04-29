@@ -1,6 +1,5 @@
 """Tests for src/snmp_scanner.py — SNMP device scanner."""
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # ---------------------------------------------------------------------------

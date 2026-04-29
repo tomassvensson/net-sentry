@@ -3,8 +3,6 @@
 import json
 import logging
 
-import pytest
-
 from src.logging_setup import _build_json_formatter, _build_plain_formatter, setup_logging
 
 
@@ -48,9 +46,7 @@ class TestSetupLogging:
     def test_setup_logging_json_uses_json_formatter(self) -> None:
         root = logging.getLogger()
         setup_logging(json_enabled=True)
-        handler = next(
-            h for h in root.handlers if isinstance(h, logging.StreamHandler)
-        )
+        handler = next(h for h in root.handlers if isinstance(h, logging.StreamHandler))
         # Formatter should be able to format to valid JSON
         record = logging.LogRecord(
             name="test",

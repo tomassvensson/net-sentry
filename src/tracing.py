@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -69,17 +69,15 @@ def setup_tracing(
         _do_setup_tracing(service_name=service_name, exporter=exporter)
         _tracing_initialised = True
     except ImportError as exc:
-        _logger.warning(
-            "opentelemetry-sdk is not installed; tracing disabled. (%s)", exc
-        )
+        _logger.warning("opentelemetry-sdk is not installed; tracing disabled. (%s)", exc)
 
 
 def _do_setup_tracing(service_name: str, exporter: str) -> None:
     """Internal helper — always imports from opentelemetry (may raise ImportError)."""
-    from opentelemetry import trace  # type: ignore[import-untyped]
-    from opentelemetry.sdk.resources import SERVICE_NAME, Resource  # type: ignore[import-untyped]
-    from opentelemetry.sdk.trace import TracerProvider  # type: ignore[import-untyped]
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore[import-untyped]
+    from opentelemetry import trace
+    from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
     effective_name = os.environ.get("OTEL_SERVICE_NAME", service_name)
     resource = Resource(attributes={SERVICE_NAME: effective_name})
@@ -97,7 +95,7 @@ def _do_setup_tracing(service_name: str, exporter: str) -> None:
     )
 
 
-def _build_exporter(exporter: str):  # type: ignore[return]
+def _build_exporter(exporter: str) -> Any:
     """Return a span exporter instance for the given name.
 
     Args:
@@ -110,24 +108,23 @@ def _build_exporter(exporter: str):  # type: ignore[return]
         return None
 
     if exporter == "console":
-        from opentelemetry.sdk.trace.export import ConsoleSpanExporter  # type: ignore[import-untyped]
+        from opentelemetry.sdk.trace.export import ConsoleSpanExporter
 
         return ConsoleSpanExporter()
 
     if exporter == "otlp":
         endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
         try:
-            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (  # type: ignore[import-untyped]
+            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
                 OTLPSpanExporter,
             )
 
             return OTLPSpanExporter(endpoint=endpoint)
         except ImportError:
             _logger.warning(
-                "opentelemetry-exporter-otlp-proto-grpc not installed; "
-                "falling back to ConsoleSpanExporter."
+                "opentelemetry-exporter-otlp-proto-grpc not installed; falling back to ConsoleSpanExporter."
             )
-            from opentelemetry.sdk.trace.export import ConsoleSpanExporter  # type: ignore[import-untyped]
+            from opentelemetry.sdk.trace.export import ConsoleSpanExporter
 
             return ConsoleSpanExporter()
 
@@ -145,7 +142,7 @@ def instrument_fastapi(app: FastAPI) -> None:
         app: The FastAPI application instance to instrument.
     """
     try:
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # type: ignore[import-untyped]
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
         FastAPIInstrumentor.instrument_app(app)
         _logger.debug("FastAPI OpenTelemetry instrumentation attached.")

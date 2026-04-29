@@ -56,7 +56,7 @@ def _build_json_formatter() -> logging.Formatter:
         A :class:`logging.Formatter` that produces JSON output.
     """
     try:
-        from pythonjsonlogger.json import JsonFormatter as _JsonFormatter  # type: ignore[import-untyped]
+        from pythonjsonlogger.json import JsonFormatter as _JsonFormatter
 
         class _CustomJsonFormatter(_JsonFormatter):
             def add_fields(
@@ -80,9 +80,7 @@ def _build_json_formatter() -> logging.Formatter:
         )
     except ImportError:
         # python-json-logger is optional; fall back gracefully.
-        logging.getLogger(__name__).warning(
-            "python-json-logger not installed; falling back to plain formatter."
-        )
+        logging.getLogger(__name__).warning("python-json-logger not installed; falling back to plain formatter.")
         return _build_plain_formatter()
 
 

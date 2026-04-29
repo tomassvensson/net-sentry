@@ -17,7 +17,7 @@ import subprocess
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from src.oui_lookup import is_randomized_mac, lookup_vendor, normalize_mac
 
@@ -159,7 +159,7 @@ def _scan_windows_bluetooth_devices() -> list[BluetoothDevice]:
 
 def scan_ble_devices(
     timeout_seconds: float = 10.0,
-    scanning_mode: str = "passive",
+    scanning_mode: Literal["active", "passive"] = "passive",
 ) -> list[BluetoothDevice]:
     """Scan for BLE devices on Linux using bleak.
 
@@ -194,7 +194,7 @@ def scan_ble_devices(
 
 async def _discover_ble_devices(
     timeout_seconds: float,
-    scanning_mode: str = "passive",
+    scanning_mode: Literal["active", "passive"] = "passive",
 ) -> list[Any]:
     """Run a bleak discovery round and return the raw device list.
 
@@ -208,7 +208,7 @@ async def _discover_ble_devices(
     return list(await scanner.discover(timeout=timeout_seconds))
 
 
-def _run_ble_discovery(timeout_seconds: float, scanning_mode: str = "passive") -> list[Any]:
+def _run_ble_discovery(timeout_seconds: float, scanning_mode: Literal["active", "passive"] = "passive") -> list[Any]:
     """Run BLE discovery even when the current thread already has an event loop."""
     try:
         asyncio.get_running_loop()

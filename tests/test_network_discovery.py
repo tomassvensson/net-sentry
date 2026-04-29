@@ -2,7 +2,13 @@
 
 import pytest
 
-from src.network_discovery import NetworkDevice, _parse_arp_output, _parse_linux_routing_table, _parse_windows_routing_table, discover_subnets_from_routing_table
+from src.network_discovery import (
+    NetworkDevice,
+    _parse_arp_output,
+    _parse_linux_routing_table,
+    _parse_windows_routing_table,
+    discover_subnets_from_routing_table,
+)
 
 
 class TestParseArpOutput:
@@ -175,14 +181,18 @@ class TestDiscoverSubnetsFromRoutingTable:
         """discover_subnets_from_routing_table() calls the right OS parser."""
         from unittest.mock import patch
 
-        with patch("src.network_discovery.platform.system", return_value="Windows"), \
-             patch("src.network_discovery._parse_windows_routing_table", return_value=["192.168.0.0/24"]) as mock_win:
+        with (
+            patch("src.network_discovery.platform.system", return_value="Windows"),
+            patch("src.network_discovery._parse_windows_routing_table", return_value=["192.168.0.0/24"]) as mock_win,
+        ):
             result = discover_subnets_from_routing_table()
         mock_win.assert_called_once()
         assert result == ["192.168.0.0/24"]
 
-        with patch("src.network_discovery.platform.system", return_value="Linux"), \
-             patch("src.network_discovery._parse_linux_routing_table", return_value=["10.0.0.0/8"]) as mock_lin:
+        with (
+            patch("src.network_discovery.platform.system", return_value="Linux"),
+            patch("src.network_discovery._parse_linux_routing_table", return_value=["10.0.0.0/8"]) as mock_lin,
+        ):
             result = discover_subnets_from_routing_table()
         mock_lin.assert_called_once()
         assert result == ["10.0.0.0/8"]

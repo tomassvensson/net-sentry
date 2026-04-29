@@ -121,7 +121,7 @@ def query_snmp_device(
     import asyncio  # noqa: PLC0415
 
     try:
-        from pysnmp.hlapi.asyncio import (  # type: ignore[import-untyped]
+        from pysnmp.hlapi.asyncio import (
             CommunityData,
             ContextData,
             ObjectIdentity,

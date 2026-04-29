@@ -19,12 +19,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.scanner_plugin import ScanResult, ScannerPlugin
-
+from src.scanner_plugin import ScannerPlugin, ScanResult
 
 # ---------------------------------------------------------------------------
 # Minimal concrete implementations used by the parametrized tests
 # ---------------------------------------------------------------------------
+
 
 class _MinimalPlugin(ScannerPlugin):
     name = "minimal_plugin"
@@ -66,6 +66,7 @@ _PLUGIN_CLASSES = [_MinimalPlugin, _PluginWithResults, _UnavailablePlugin]
 # ---------------------------------------------------------------------------
 # Contract parametrized tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(params=_PLUGIN_CLASSES, ids=lambda cls: cls.__name__)
 def plugin_instance(request):
@@ -143,6 +144,7 @@ def test_is_available_returns_bool(plugin_instance: ScannerPlugin) -> None:
 # Additional unit tests for ScanResult dataclass
 # ---------------------------------------------------------------------------
 
+
 class TestScanResult:
     """Unit tests for ScanResult dataclass."""
 
@@ -178,6 +180,7 @@ class TestScanResult:
 # ---------------------------------------------------------------------------
 # ScannerPlugin ABC enforcement
 # ---------------------------------------------------------------------------
+
 
 class TestScannerPluginABC:
     """Verify that ScannerPlugin cannot be instantiated without implementing scan()."""

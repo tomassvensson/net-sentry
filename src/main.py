@@ -34,13 +34,13 @@ from src.device_tracker import (
 from src.home_assistant import HaDevice, build_ha_lookup, enrich_from_ha, fetch_ha_devices
 from src.ipv6_scanner import Ipv6Neighbor, scan_ipv6_neighbors
 from src.logging_setup import setup_logging
-from src.tracing import setup_tracing
 from src.mdns_scanner import MdnsDevice
 from src.models import Device, VisibilityWindow
 from src.network_discovery import NetworkDevice, ping_sweep, scan_arp_table
 from src.oui_lookup import is_randomized_mac
 from src.port_scanner import decode_open_ports, encode_open_ports, scan_host_ports
 from src.ssdp_scanner import SsdpDevice
+from src.tracing import setup_tracing
 from src.whitelist import WhitelistManager
 from src.wifi_scanner import WifiNetwork, scan_wifi_networks
 
@@ -317,11 +317,7 @@ def _run_single_scan(
         _display_results(session, whitelist)
 
     # Check disappearance rules (E: configurable alert rules)
-    disappearance_macs = [
-        r.mac_address
-        for r in config.alert.rules
-        if r.rule_type == "disappearance" and r.mac_address
-    ]
+    disappearance_macs = [r.mac_address for r in config.alert.rules if r.rule_type == "disappearance" and r.mac_address]
     if disappearance_macs:
         with get_session(engine) as session:
             rows = (

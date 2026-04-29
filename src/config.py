@@ -8,6 +8,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class ScanConfig:
     wifi_enabled: bool = True
     bluetooth_enabled: bool = True
     ble_enabled: bool = True
-    ble_scanning_mode: str = "passive"  # "passive" or "active"
+    ble_scanning_mode: Literal["active", "passive"] = "passive"
     arp_enabled: bool = True
     mdns_enabled: bool = True
     ssdp_enabled: bool = True
@@ -130,8 +131,8 @@ class AlertRule:
     mac_address: str | None = None
     threshold_minutes: int = 30
     # -- time_window fields --
-    start_hour: int = 0   # 0-23 inclusive
-    end_hour: int = 6     # 0-23 exclusive (alert if start_hour <= hour < end_hour)
+    start_hour: int = 0  # 0-23 inclusive
+    end_hour: int = 6  # 0-23 exclusive (alert if start_hour <= hour < end_hour)
     device_type_filter: str | None = None  # optional; e.g. "bluetooth"
     # -- common --
     label: str = ""  # human-readable name for log messages

@@ -15,7 +15,6 @@ import csv
 import io
 import json
 import logging
-import shutil
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, suppress
@@ -362,6 +361,7 @@ def get_device_windows(
 # REST API v1 — Device notes / label
 # ---------------------------------------------------------------------------
 
+
 @v1.patch("/devices/{mac_address}/notes")
 @limiter.limit("60/minute")
 def update_device_notes(
@@ -451,7 +451,7 @@ async def upload_device_photo(
 
     # Remove old photo if it exists
     if device.photo_path:
-        old_file = _STATIC_DIR / device.photo_path.lstrip("/static/").lstrip("/")
+        old_file = _STATIC_DIR / device.photo_path.removeprefix("/static/").lstrip("/")
         if old_file.exists() and old_file.is_relative_to(_PHOTOS_DIR):
             old_file.unlink(missing_ok=True)
 

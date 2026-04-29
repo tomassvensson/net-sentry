@@ -1,9 +1,6 @@
 """Tests for src/tracing.py (O — OpenTelemetry tracing)."""
 
-import importlib
 import logging
-
-import pytest
 
 
 class TestSetupTracing:
@@ -36,9 +33,8 @@ class TestSetupTracing:
 
     def test_idempotent(self) -> None:
         """Calling setup_tracing twice must not raise and should set flag once."""
-        from src.tracing import setup_tracing
-
         import src.tracing as _t
+        from src.tracing import setup_tracing
 
         setup_tracing(enabled=True, exporter="none")
         assert _t._tracing_initialised is True
