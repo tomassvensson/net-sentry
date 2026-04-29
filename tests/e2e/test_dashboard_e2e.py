@@ -1,4 +1,4 @@
-"""Playwright E2E tests for the BtWiFi dashboard.
+"""Playwright E2E tests for the Net Sentry dashboard.
 
 These tests start the FastAPI application in a background thread and use
 Playwright to exercise the browser UI.  They are skipped automatically
@@ -111,13 +111,13 @@ class TestDashboard:
     def test_page_title(self, page: Page, base_url: str) -> None:
         """The page title should contain 'BtWiFi'."""
         page.goto(base_url)
-        expect(page).to_have_title("BtWiFi Device Tracker")
+        expect(page).to_have_title("Net Sentry Device Tracker")
 
     def test_header_present(self, page: Page, base_url: str) -> None:
         """The header h1 should display the application name."""
         page.goto(base_url)
         heading = page.locator(".header h1")
-        expect(heading).to_have_text("BtWiFi Device Tracker")
+        expect(heading).to_have_text("Net Sentry Device Tracker")
 
     def test_device_table_rendered(self, page: Page, base_url: str) -> None:
         """The device table wrapper should be present in the DOM."""
