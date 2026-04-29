@@ -1,6 +1,14 @@
 # Net Sentry — Network Device Visibility Tracker
 
-> **Formerly known as BtWiFi.** GitHub repo: <https://github.com/tomassvensson/btwf>
+> GitHub repo: <https://github.com/tomassvensson/net-sentry>
+
+> **⚠️ Legal & Ethics Notice**
+> Net Sentry is designed for monitoring **networks and devices that you own or have explicit permission to scan**.
+> Scanning networks or devices without authorisation may violate applicable laws (e.g. the Computer Fraud and Abuse Act in the US, the Computer Misuse Act in the UK, or equivalent legislation in your jurisdiction).
+> By using Net Sentry you confirm that you have the necessary rights or permissions to scan the target environment.
+> The authors accept no liability for any misuse.
+
+---
 
 Net Sentry continuously or on-demand scans your wireless and wired environment for devices — WiFi access points, Bluetooth peripherals, ARP-visible hosts, mDNS/SSDP services, and IPv6 neighbours — and persists every *visibility window* (who was visible, when, and how strongly) in a local database.
 
@@ -50,8 +58,8 @@ Net Sentry continuously or on-demand scans your wireless and wired environment f
 ### Install
 
 ```bash
-git clone https://github.com/tomassvensson/btwf.git
-cd btwf
+git clone https://github.com/tomassvensson/net-sentry.git
+cd net-sentry
 python -m venv .venv
 # Linux/macOS:
 source .venv/bin/activate
@@ -160,6 +168,47 @@ mqtt:
 
 The API is versioned under `/api/v1/`.  OpenAPI docs are at `http://localhost:8000/docs`.
 
+### Interactive docs & schema
+
+```bash
+# Swagger UI
+open http://localhost:8000/docs
+# ReDoc
+open http://localhost:8000/redoc
+# Raw OpenAPI JSON schema
+curl http://localhost:8000/openapi.json
+```
+
+### Example requests
+
+```bash
+# Health check
+curl http://localhost:8000/api/v1/health
+
+# List all devices (paginated)
+curl "http://localhost:8000/api/v1/devices?limit=20&offset=0"
+
+# Get a specific device
+curl http://localhost:8000/api/v1/devices/aa:bb:cc:dd:ee:ff
+
+# List visibility windows for a device
+curl http://localhost:8000/api/v1/devices/aa:bb:cc:dd:ee:ff/windows
+
+# Summary stats
+curl http://localhost:8000/api/v1/summary
+
+# Export all devices as JSON
+curl http://localhost:8000/api/v1/export/devices.json
+
+# Obtain a JWT (when auth is enabled)
+curl -X POST http://localhost:8000/api/v1/auth/token \
+     -d 'username=admin&password=changeme'
+
+# Authenticated request
+curl -H 'Authorization: Bearer <token>' \
+     http://localhost:8000/api/v1/devices
+```
+
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/v1/health` | Liveness check -> `{"status":"ok"}` |
@@ -186,7 +235,7 @@ Net Sentry exposes Prometheus metrics at `/metrics`:
 
 ### Grafana
 
-A pre-built dashboard JSON is included at `grafana/provisioning/dashboards/btwifi.json`.
+A pre-built dashboard JSON is included at `grafana/provisioning/dashboards/net-sentry.json`.
 It is auto-provisioned when you start the dashboards stack (see Docker section below).
 
 ---
@@ -237,6 +286,21 @@ Migrations run automatically at startup via `init_database()`.
 ---
 
 ## Development
+
+### Pre-commit hooks
+
+Pre-commit hooks run ruff, mypy, and trailing-whitespace checks before each commit.
+
+```bash
+# Install hooks (once per clone)
+pre-commit install
+
+# Run all hooks manually against all files
+pre-commit run --all-files
+
+# Update hook versions
+pre-commit autoupdate
+```
 
 ```bash
 # Run all tests
@@ -305,9 +369,18 @@ net-sentry/
 
 ---
 
+## Demo
+
+> **TODO**: A demo GIF/video (dashboard + new device alert + Grafana panel) will be added here.
+> To record one yourself: start the full Docker stack, open `http://localhost:3000`, and use a tool such as [LICEcap](https://www.cockos.com/licecap/) or [asciinema](https://asciinema.org/) to capture a short clip.
+
+---
+
 ## ADRs
 
 Architecture decision records live in [docs/adr/](docs/adr/).
+
+For a full architecture description see [docs/architecture.md](docs/architecture.md).
 
 ---
 
