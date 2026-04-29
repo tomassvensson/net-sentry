@@ -424,7 +424,7 @@ _T = TypeVar("_T")
 
 
 def _run_scanner(name: str, scanner_fn: Callable[[], list[_T]]) -> list[_T]:
-    """Execute a scanner function with error handling.
+    """Execute a scanner function with error handling and per-scanner metrics.
 
     Args:
         name: Human-readable scanner name for logging.
@@ -433,11 +433,29 @@ def _run_scanner(name: str, scanner_fn: Callable[[], list[_T]]) -> list[_T]:
     Returns:
         Scanner results, or empty list on failure.
     """
+    import time as _time
+
+    start = _time.time()
     try:
-        return scanner_fn()
+        results = scanner_fn()
+        return results
     except Exception as exc:
         logger.error("%s scan failed: %s", name, exc)
+        try:
+            from src.metrics import SCAN_ERRORS
+
+            SCAN_ERRORS.labels(scanner_type=name).inc()
+        except Exception:  # pragma: no cover
+            pass
         return []
+    finally:
+        elapsed = _time.time() - start
+        try:
+            from src.metrics import SCAN_DURATION_BY_SCANNER
+
+            SCAN_DURATION_BY_SCANNER.labels(scanner=name).observe(elapsed)
+        except Exception:  # pragma: no cover
+            pass
 
 
 def _merge_bluetooth_devices(
@@ -1073,6 +1091,26 @@ def main() -> None:
     """
     # Pre-parse scan-control flags (ignore unknown so --export still works below)
     import argparse as _ap
+
+    # Top-level parser for --help (add_help=True so -h/--help exits cleanly)
+    _top_parser = _ap.ArgumentParser(
+        prog="net-sentry",
+        description="Net Sentry — Network Device Visibility Tracker",
+        formatter_class=_ap.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  net-sentry --once              Run a single scan and exit\n"
+            "  net-sentry --continuous        Scan in a loop\n"
+            "  net-sentry --export csv        Dump all known devices as CSV\n"
+        ),
+    )
+    _top_parser.add_argument("--once", action="store_true", help="Run a single scan cycle and exit.")
+    _top_parser.add_argument("--continuous", action="store_true", help="Run in continuous loop.")
+    _top_parser.add_argument("--rescan-ports", action="store_true", dest="rescan_ports",
+                             help="Force a fresh TCP port scan for all network devices this cycle.")
+    _top_parser.add_argument("--export", choices=["csv", "json"], help="Dump all devices and exit.")
+    _top_parser.add_argument("--output", default="-", help="Write --export output to file (default: stdout).")
+    _top_parser.parse_known_args()  # exits with 0 if --help / -h was passed
 
     _scan_parser = _ap.ArgumentParser(add_help=False)
     _scan_parser.add_argument(

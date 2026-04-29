@@ -2,6 +2,10 @@
 
 Logs alerts when new devices are discovered that are not in the
 whitelist. Optionally writes alerts to a dedicated log file.
+
+Alert deduplication is controlled by ``AlertConfig.cooldown_seconds`` (default
+300 s). The same MAC address will not trigger a second alert within that window,
+preventing log spam when a device flaps on/off.
 """
 
 import logging
@@ -13,7 +17,7 @@ from src.config import AlertConfig
 logger = logging.getLogger(__name__)
 
 # Dedicated alert logger
-_alert_logger = logging.getLogger("btwifi.alerts")
+_alert_logger = logging.getLogger("net_sentry.alerts")
 
 
 class AlertManager:
@@ -27,6 +31,8 @@ class AlertManager:
         """
         self._config = config
         self._alert_count = 0
+        # MAC address -> timestamp of last alert for deduplication
+        self._last_alerted: dict[str, datetime] = {}
 
         if config.log_file:
             self._setup_file_handler(config.log_file)
@@ -58,6 +64,9 @@ class AlertManager:
     ) -> None:
         """Handle a new device discovery.
 
+        Alerts are deduplicated: if the same MAC address was already alerted
+        within ``cooldown_seconds``, the call is a no-op.
+
         Args:
             mac_address: MAC address of the new device.
             device_type: Type of device (wifi_ap, bluetooth, network, etc.).
@@ -68,8 +77,24 @@ class AlertManager:
         if not self._config.enabled:
             return
 
+        now_dt = datetime.now(timezone.utc)
+
+        # Deduplication: skip if already alerted within cooldown window
+        last = self._last_alerted.get(mac_address)
+        if last is not None:
+            elapsed = (now_dt - last).total_seconds()
+            if elapsed < self._config.cooldown_seconds:
+                logger.debug(
+                    "Alert suppressed for %s (cooldown: %.0f / %d s)",
+                    mac_address,
+                    elapsed,
+                    self._config.cooldown_seconds,
+                )
+                return
+
+        self._last_alerted[mac_address] = now_dt
         self._alert_count += 1
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        now = now_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
 
         status = "TRUSTED" if is_whitelisted else "UNKNOWN"
 

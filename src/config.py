@@ -108,7 +108,7 @@ class PingSweepConfig:
 class DatabaseConfig:
     """Database configuration."""
 
-    url: str = "sqlite:///btwifi.db"
+    url: str = "sqlite:///net-sentry.db"
     retention_days: int = 0  # 0 = keep forever
     vacuum_on_cleanup: bool = True
 
@@ -121,6 +121,7 @@ class AlertConfig:
     log_new_devices: bool = True
     log_file: str | None = None
     sound_enabled: bool = False
+    cooldown_seconds: int = 300  # Minimum seconds between alerts for the same MAC address
 
 
 @dataclass
@@ -148,7 +149,7 @@ class MonitorModeConfig:
 
     interface: str = "wlan0mon"
     use_docker: bool = True
-    docker_image: str = "btwifi-monitor:latest"
+    docker_image: str = "net-sentry-monitor:latest"
     channel_hop: bool = True
     hop_interval_seconds: float = 0.5
     capture_duration_seconds: int = 30
@@ -189,10 +190,10 @@ class MqttConfig:
     enabled: bool = False
     broker_host: str = "localhost"
     broker_port: int = 1883
-    topic_prefix: str = "btwifi"
+    topic_prefix: str = "net-sentry"
     username: str | None = None
     password: str | None = None
-    client_id: str = "btwifi-scanner"
+    client_id: str = "net-sentry-scanner"
 
 
 @dataclass
@@ -231,7 +232,7 @@ def load_config(config_path: str | None = None) -> AppConfig:
     Returns:
         Populated AppConfig instance.
     """
-    path = config_path or os.environ.get("BTWIFI_CONFIG", _DEFAULT_CONFIG_PATH)
+    path = config_path or os.environ.get("NET_SENTRY_CONFIG") or os.environ.get("BTWIFI_CONFIG", _DEFAULT_CONFIG_PATH)
     config = AppConfig()
 
     if Path(path).exists():
@@ -352,6 +353,7 @@ def _parse_raw_config(raw: dict) -> AppConfig:
             log_new_devices=al.get("log_new_devices", config.alert.log_new_devices),
             log_file=al.get("log_file", config.alert.log_file),
             sound_enabled=al.get("sound_enabled", config.alert.sound_enabled),
+            cooldown_seconds=al.get("cooldown_seconds", config.alert.cooldown_seconds),
         )
 
     if "whitelist" in raw:
@@ -423,7 +425,8 @@ def _parse_raw_config(raw: dict) -> AppConfig:
 def _apply_env_overrides(config: AppConfig) -> AppConfig:
     """Apply environment variable overrides to configuration.
 
-    Environment variables follow the pattern BTWIFI_<SECTION>_<KEY>.
+    Environment variables follow the pattern NET_SENTRY_<SECTION>_<KEY>.
+    The legacy BTWIFI_* names are also accepted for backwards-compatibility.
 
     Args:
         config: Configuration to override.
@@ -434,28 +437,28 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
     if db_url := os.environ.get("DATABASE_URL"):
         config.database.url = db_url
 
-    if jwt_secret := os.environ.get("BTWIFI_JWT_SECRET"):
+    if jwt_secret := (os.environ.get("NET_SENTRY_JWT_SECRET") or os.environ.get("BTWIFI_JWT_SECRET")):
         config.api.jwt_secret = jwt_secret
 
-    if cors := os.environ.get("BTWIFI_CORS_ORIGINS"):
+    if cors := (os.environ.get("NET_SENTRY_CORS_ORIGINS") or os.environ.get("BTWIFI_CORS_ORIGINS")):
         config.api.cors_origins = [o.strip() for o in cors.split(",") if o.strip()]
 
-    if auth_enabled := os.environ.get("BTWIFI_AUTH_ENABLED"):
+    if auth_enabled := (os.environ.get("NET_SENTRY_AUTH_ENABLED") or os.environ.get("BTWIFI_AUTH_ENABLED")):
         config.api.auth_enabled = auth_enabled.lower() in ("1", "true", "yes")
 
-    if interval := os.environ.get("BTWIFI_SCAN_INTERVAL"):
+    if interval := (os.environ.get("NET_SENTRY_SCAN_INTERVAL") or os.environ.get("BTWIFI_SCAN_INTERVAL")):
         try:
             config.scan.interval_seconds = int(interval)
         except ValueError:
-            logger.warning("Invalid BTWIFI_SCAN_INTERVAL: %s", interval)
+            logger.warning("Invalid NET_SENTRY_SCAN_INTERVAL: %s", interval)
 
-    if continuous := os.environ.get("BTWIFI_CONTINUOUS"):
+    if continuous := (os.environ.get("NET_SENTRY_CONTINUOUS") or os.environ.get("BTWIFI_CONTINUOUS")):
         config.scan.continuous = continuous.lower() in ("1", "true", "yes")
 
-    if gap := os.environ.get("BTWIFI_GAP_SECONDS"):
+    if gap := (os.environ.get("NET_SENTRY_GAP_SECONDS") or os.environ.get("BTWIFI_GAP_SECONDS")):
         try:
             config.scan.gap_seconds = int(gap)
         except ValueError:
-            logger.warning("Invalid BTWIFI_GAP_SECONDS: %s", gap)
+            logger.warning("Invalid NET_SENTRY_GAP_SECONDS: %s", gap)
 
     return config

@@ -52,13 +52,17 @@ monitor = [
 
 [project.scripts]
 net-sentry = "src.main:main"
-# Keep btwifi alias for backwards compat during transition
+# Keep btwifi alias for backwards-compatibility during transition
 btwifi = "src.main:main"
 
 # Entry-point group for third-party scanner plugins.
 # Third-party packages can register a ScannerPlugin subclass here.
 # Example:  my_scanner = "my_package.my_scanner:MyScanner"
 [project.entry-points."net_sentry.scanners"]
+snmp = "src.snmp_scanner:SnmpScanner"
+
+# Legacy entry-point group kept for plugins published against the old name
+[project.entry-points."btwifi.scanners"]
 snmp = "src.snmp_scanner:SnmpScanner"
 
 [tool.pytest.ini_options]
@@ -81,10 +85,23 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH"]
 
 [tool.mypy]
 python_version = "3.10"
+# Incremental approach to strict mode — enable individual checks rather than strict = true
+# until all type errors across third-party stubs are resolved.
 warn_return_any = true
 warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
 disallow_untyped_defs = true
+disallow_incomplete_defs = true
 check_untyped_defs = true
+no_implicit_optional = true
+no_implicit_reexport = true
+ignore_missing_imports = true  # third-party libs without stubs
+
+# Per-module overrides for legacy / generated code
+[[tool.mypy.overrides]]
+module = ["alembic.*", "alembic.versions.*"]
+ignore_errors = true
 
 [build-system]
 requires = ["setuptools>=68.0"]
