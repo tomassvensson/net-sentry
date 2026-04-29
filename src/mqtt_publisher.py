@@ -46,11 +46,11 @@ class MqttPublisher:
 
         if mqtt is None:
             logger.error("paho-mqtt not installed. MQTT publishing disabled.")
-            self._client: mqtt.Client | None = None  # type: ignore[union-attr]
+            self._client: mqtt.Client | None = None
             return
 
         self._client = mqtt.Client(
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,  # type: ignore[attr-defined]
             client_id=client_id,
         )
         if username:

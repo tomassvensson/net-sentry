@@ -119,7 +119,7 @@ def query_snmp_device(
         SNMP not supported.
     """
     try:
-        from pysnmp.hlapi import (  # type: ignore[import-untyped]
+        from pysnmp.hlapi import (
             CommunityData,
             ContextData,
             ObjectIdentity,
@@ -138,7 +138,7 @@ def query_snmp_device(
     transport = UdpTransportTarget((ip_address, port), timeout=timeout, retries=retries)
     auth = CommunityData(community, mpModel=1)  # mpModel=1 → SNMPv2c
 
-    error_indication, error_status, error_index, result = next(  # type: ignore[call-overload]
+    error_indication, error_status, error_index, result = next(
         getCmd(engine, auth, transport, ContextData(), *var_binds)
     )
 

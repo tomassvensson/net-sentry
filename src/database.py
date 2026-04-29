@@ -55,7 +55,7 @@ def init_database(database_url: str | None = None) -> Engine:
     return engine
 
 
-def _build_default_clause(column: Column, col_type: str) -> str:  # type: ignore[type-arg]
+def _build_default_clause(column: Column, col_type: str) -> str:
     """Build the DEFAULT clause for a column being added via ALTER TABLE.
 
     Args:

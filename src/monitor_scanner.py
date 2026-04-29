@@ -102,7 +102,7 @@ def _capture_frames(
         List of detected devices.
     """
     # Import scapy only when actually needed
-    from scapy.all import Dot11, Dot11Beacon, Dot11Elt, Dot11ProbeReq, RadioTap, sniff  # type: ignore[import-untyped]
+    from scapy.all import Dot11, Dot11Beacon, Dot11Elt, Dot11ProbeReq, RadioTap, sniff
 
     devices: dict[str, MonitorModeDevice] = {}
     scan_time = datetime.now(timezone.utc)
@@ -119,7 +119,7 @@ def _capture_frames(
         if not hasattr(pkt, "haslayer"):
             return
 
-        if not pkt.haslayer(Dot11):  # type: ignore[union-attr]
+        if not pkt.haslayer(Dot11):
             return
 
         dot11 = pkt.getlayer(Dot11)  # type: ignore[attr-defined]
@@ -135,7 +135,7 @@ def _capture_frames(
 
         # Extract signal strength from RadioTap header
         signal = None
-        if pkt.haslayer(RadioTap):  # type: ignore[union-attr]
+        if pkt.haslayer(RadioTap):
             radiotap = pkt.getlayer(RadioTap)  # type: ignore[attr-defined]
             if hasattr(radiotap, "dBm_AntSignal"):
                 signal = float(radiotap.dBm_AntSignal)
@@ -144,13 +144,13 @@ def _capture_frames(
         frame_type = "data"
         ssid = None
 
-        if pkt.haslayer(Dot11Beacon):  # type: ignore[union-attr]
+        if pkt.haslayer(Dot11Beacon):
             frame_type = "beacon"
             elt = pkt.getlayer(Dot11Elt)  # type: ignore[attr-defined]
             if elt and elt.ID == 0:
                 with contextlib.suppress(UnicodeDecodeError, AttributeError):
                     ssid = elt.info.decode("utf-8", errors="replace")
-        elif pkt.haslayer(Dot11ProbeReq):  # type: ignore[union-attr]
+        elif pkt.haslayer(Dot11ProbeReq):
             frame_type = "probe_request"
             elt = pkt.getlayer(Dot11Elt)  # type: ignore[attr-defined]
             if elt and elt.ID == 0:

@@ -186,9 +186,9 @@ def scan_ble_devices(timeout_seconds: float = 10.0) -> list[BluetoothDevice]:
 
 async def _discover_ble_devices(timeout_seconds: float) -> list[Any]:
     """Run a bleak discovery round and return the raw device list."""
-    from bleak import BleakScanner  # type: ignore[import-untyped]
+    from bleak import BleakScanner
 
-    return list(await BleakScanner.discover(timeout=timeout_seconds))  # type: ignore[no-any-return]
+    return list(await BleakScanner.discover(timeout=timeout_seconds))
 
 
 def _run_ble_discovery(timeout_seconds: float) -> list[Any]:

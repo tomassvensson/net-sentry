@@ -55,7 +55,7 @@ def _load_jose() -> Any:
     global _jose_jwt  # noqa: PLW0603
     if _jose_jwt is None:
         try:
-            from jose import jwt as jose_jwt  # type: ignore[import-untyped]  # noqa: F401
+            from jose import jwt as jose_jwt  # noqa: F401
 
             _jose_jwt = jose_jwt
         except ImportError as exc:  # pragma: no cover
@@ -69,7 +69,7 @@ def _load_bcrypt() -> Any:
     global _bcrypt  # noqa: PLW0603
     if _bcrypt is None:
         try:
-            import bcrypt as _bcrypt_mod  # type: ignore[import-untyped]
+            import bcrypt as _bcrypt_mod
 
             _bcrypt = _bcrypt_mod
         except ImportError as exc:  # pragma: no cover
@@ -117,7 +117,7 @@ def decode_access_token(token: str, secret: str, algorithm: str = "HS256") -> di
     """
     jose_jwt = _load_jose()
     try:
-        from jose import JWTError  # type: ignore[import-untyped]
+        from jose import JWTError
 
         return cast("dict[str, Any]", jose_jwt.decode(token, secret, algorithms=[algorithm]))
     except JWTError as exc:
