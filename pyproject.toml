@@ -47,6 +47,9 @@ dev = [
     # E2E tests (Playwright — Apache 2.0)
     "playwright>=1.44.0",
     "pytest-playwright>=0.5.0",
+    # Observability packages (required for tracing/logging tests)
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-instrumentation-fastapi>=0.41b0",
 ]
 monitor = [
     "scapy>=2.5",
