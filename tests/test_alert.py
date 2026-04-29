@@ -1,5 +1,7 @@
 """Tests for alert management system."""
 
+import logging
+
 import pytest
 
 from src.alert import AlertManager
@@ -96,3 +98,30 @@ class TestAlertManager:
             device_type="wifi_ap",
         )
         assert mgr.alert_count == 1
+
+    @pytest.mark.timeout(30)
+    def test_alert_logs_redact_device_identifiers(self, caplog, tmp_path) -> None:
+        log_file = tmp_path / "alerts.log"
+        config = AlertConfig(enabled=True, log_file=str(log_file), log_new_devices=True)
+        mgr = AlertManager(config)
+
+        caplog.set_level(logging.INFO)
+        mgr.on_new_device(
+            mac_address="AA:BB:CC:DD:EE:FF",
+            device_type="network",
+            vendor="Acme Corp",
+            device_name="Office Sensor",
+            is_whitelisted=False,
+        )
+
+        for handler in logging.getLogger("btwifi.alerts").handlers:
+            handler.flush()
+
+        assert "AA:BB:CC:DD:EE:FF" not in caplog.text
+        assert "Office Sensor" not in caplog.text
+        assert "Acme Corp" not in caplog.text
+
+        alert_log = log_file.read_text(encoding="utf-8")
+        assert "AA:BB:CC:DD:EE:FF" not in alert_log
+        assert "Office Sensor" not in alert_log
+        assert "Acme Corp" not in alert_log

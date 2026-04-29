@@ -672,9 +672,7 @@ def _upsert_network_device(
         and arp_dev.ip_address
         and (rescan_ports or not device.open_ports)
     ):
-        _mac = arp_dev.mac_address or ""
-        _masked = "**:**:**:**:" + ":".join(_mac.split(":")[-2:]) if _mac else "(unknown)"
-        logger.info("Port scanning %s (%s)…", arp_dev.ip_address, _masked)
+        logger.info("Port scan started for a network device.")
         open_ports = scan_host_ports(
             arp_dev.ip_address,
             ports=config.port_scan.ports,
@@ -682,12 +680,7 @@ def _upsert_network_device(
             max_workers=config.port_scan.max_workers,
         )
         device.open_ports = encode_open_ports(open_ports) if open_ports else ""
-        logger.info(
-            "Port scan %s → %d open port(s): %s",
-            arp_dev.ip_address,
-            len(open_ports),
-            device.open_ports or "(none)",
-        )
+        logger.info("Port scan completed: %d open port(s).", len(open_ports))
 
     update_visibility(
         session,

@@ -46,7 +46,7 @@ def upsert_wifi_device(session: Session, network: WifiNetwork) -> Device:
             channel=network.channel,
         )
         session.add(device)
-        logger.info("New WiFi device: %s (%s) — %s", network.bssid, network.vendor or "Unknown", network.ssid)
+        logger.info("New WiFi device discovered.")
     else:
         # Update mutable fields
         device.ssid = network.ssid or device.ssid
@@ -85,12 +85,7 @@ def upsert_bluetooth_device(session: Session, bt_device: BluetoothDevice) -> Dev
             device_name=bt_device.device_name,
         )
         session.add(device)
-        logger.info(
-            "New Bluetooth device: %s (%s) — %s",
-            bt_device.mac_address,
-            bt_device.vendor or "Unknown",
-            bt_device.device_name or "N/A",
-        )
+        logger.info("New Bluetooth device discovered.")
     else:
         device.vendor = bt_device.vendor or device.vendor
         device.device_name = bt_device.device_name or device.device_name

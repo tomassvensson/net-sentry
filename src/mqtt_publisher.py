@@ -156,7 +156,7 @@ class MqttPublisher:
             logger.warning("MQTT publish failed with rc=%s", result.rc)
             return False
         except Exception:
-            logger.exception("MQTT publish error for %s", mac_address)
+            logger.exception("MQTT publish error for device event")
             from src.metrics import MQTT_ERRORS
 
             MQTT_ERRORS.inc()

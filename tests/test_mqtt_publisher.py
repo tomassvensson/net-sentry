@@ -189,6 +189,25 @@ class TestPublishDeviceEvent:
         result = pub.publish_device_event(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap")
         assert result is False
 
+    @patch("src.mqtt_publisher.mqtt")
+    @pytest.mark.timeout(30)
+    def test_publish_error_log_redacts_mac_address(self, mock_mqtt, caplog) -> None:
+        mock_client = MagicMock()
+        mock_client.publish.side_effect = RuntimeError("publish failed")
+        mock_mqtt.Client.return_value = mock_client
+        mock_mqtt.CallbackAPIVersion.VERSION2 = 2
+
+        from src.mqtt_publisher import MqttPublisher
+
+        pub = MqttPublisher()
+        pub._connected = True
+
+        with caplog.at_level("ERROR"):
+            result = pub.publish_device_event(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap")
+
+        assert result is False
+        assert "AA:BB:CC:DD:EE:FF" not in caplog.text
+
 
 class TestPublishScanSummary:
     """Tests for publish_scan_summary."""

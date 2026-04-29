@@ -36,7 +36,7 @@ class WhitelistManager:
                     trusted=entry.trusted,
                 )
             except ValueError:
-                logger.warning("Invalid MAC in whitelist: %s", entry.mac_address)
+                logger.warning("Invalid MAC in whitelist entry; skipping entry.")
 
         logger.info("Whitelist loaded: %d known devices.", len(self._entries))
 
@@ -122,7 +122,7 @@ class WhitelistManager:
             category=category,
             trusted=trusted,
         )
-        logger.info("Added to whitelist: %s (%s)", mac, name or "unnamed")
+        logger.info("Added device to whitelist.")
 
     def remove_device(self, mac_address: str) -> bool:
         """Remove a device from the whitelist.
@@ -139,7 +139,7 @@ class WhitelistManager:
             return False
         if mac in self._entries:
             del self._entries[mac]
-            logger.info("Removed from whitelist: %s", mac)
+            logger.info("Removed device from whitelist.")
             return True
         return False
 

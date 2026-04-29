@@ -729,7 +729,7 @@ def lookup_vendor(mac_address: str) -> str | None:
     try:
         normalized = normalize_mac(mac_address)
     except ValueError:
-        logger.warning("Cannot lookup vendor for invalid MAC: %s", mac_address)
+        logger.warning("Cannot lookup vendor for invalid MAC input.")
         return None
 
     # 1 — Try the full mac-vendor-lookup library
@@ -740,7 +740,7 @@ def lookup_vendor(mac_address: str) -> str | None:
             if vendor:
                 return vendor
         except Exception:
-            logger.debug("mac-vendor-lookup failed for %s, trying CSV.", normalized)
+            logger.debug("mac-vendor-lookup failed, trying CSV fallback.")
 
     # 2 — Try the local IEEE OUI CSV
     prefix = get_oui_prefix(normalized)
@@ -753,7 +753,7 @@ def lookup_vendor(mac_address: str) -> str | None:
     if vendor:
         return vendor
 
-    logger.debug("No vendor found for MAC %s (OUI prefix %s).", normalized, prefix)
+    logger.debug("No vendor found for requested MAC.")
     return None
 
 

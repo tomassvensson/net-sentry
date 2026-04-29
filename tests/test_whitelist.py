@@ -151,3 +151,14 @@ class TestWhitelistManager:
         assert len(entries) == 2
         names = {e.name for e in entries}
         assert names == {"A", "B"}
+
+    @pytest.mark.timeout(30)
+    def test_whitelist_logs_redact_mac_addresses(self, caplog) -> None:
+        with caplog.at_level("INFO"):
+            wl = WhitelistManager(_make_config(WhitelistEntry(mac_address="not-valid", name="Bad")))
+            wl.add_device("AA:BB:CC:DD:EE:FF", name="New Device")
+            assert wl.remove_device("AA:BB:CC:DD:EE:FF") is True
+
+        assert "not-valid" not in caplog.text
+        assert "AA:BB:CC:DD:EE:FF" not in caplog.text
+        assert "New Device" not in caplog.text

@@ -71,22 +71,15 @@ class AlertManager:
         self._alert_count += 1
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-        name_part = device_name or "unnamed"
-        vendor_part = vendor or "unknown vendor"
         status = "TRUSTED" if is_whitelisted else "UNKNOWN"
 
-        message = f"[{status}] New {device_type} device: {mac_address} ({vendor_part}) — {name_part} at {now}"
+        message = f"[{status}] New {device_type} device detected at {now}"
 
         if self._config.log_new_devices:
             if is_whitelisted:
-                logger.info("New trusted device: %s (%s) — %s", mac_address, vendor_part, name_part)
+                logger.info("New trusted %s device detected.", device_type)
             else:
-                logger.warning(
-                    "⚠ New UNKNOWN device: %s (%s) — %s",
-                    mac_address,
-                    vendor_part,
-                    name_part,
-                )
+                logger.warning("New unknown %s device detected.", device_type)
 
         _alert_logger.info(message)
 

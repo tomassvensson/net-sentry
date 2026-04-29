@@ -108,6 +108,13 @@ class TestLookupVendor:
         assert lookup_vendor("invalid") is None
 
     @pytest.mark.timeout(30)
+    def test_invalid_mac_log_is_redacted(self, caplog) -> None:
+        with caplog.at_level("WARNING"):
+            assert lookup_vendor("12:34") is None
+
+        assert "12:34" not in caplog.text
+
+    @pytest.mark.timeout(30)
     def test_unknown_mac_returns_none_or_vendor(self) -> None:
         """Unknown MACs should return None from builtin, may return value from full DB."""
         result = lookup_vendor("00:00:00:00:00:01")
