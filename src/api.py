@@ -1,4 +1,4 @@
-"""FastAPI application for BtWiFi device dashboard and REST API.
+"""FastAPI application for Net Sentry device dashboard and REST API.
 
 Provides:
 - HTMX-powered web dashboard at /
@@ -159,7 +159,7 @@ def configure_app(config: Any) -> None:
 
 
 app = FastAPI(
-    title="BtWiFi Device Tracker",
+    title="Net Sentry Device Tracker",
     description="Track WiFi and Bluetooth device visibility over time",
     version="0.1.0",
     lifespan=lifespan,

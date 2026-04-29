@@ -16,7 +16,7 @@
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "title": "Total Devices",
       "type": "stat",
-      "targets": [{ "expr": "sum(btwifi_devices_total)", "legendFormat": "Total" }]
+      "targets": [{ "expr": "sum(net_sentry_devices_total)", "legendFormat": "Total" }]
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -28,7 +28,7 @@
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "title": "Currently Visible",
       "type": "stat",
-      "targets": [{ "expr": "sum(btwifi_devices_visible)", "legendFormat": "Visible" }]
+      "targets": [{ "expr": "sum(net_sentry_devices_visible)", "legendFormat": "Visible" }]
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -40,7 +40,7 @@
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "title": "Scans Completed",
       "type": "stat",
-      "targets": [{ "expr": "btwifi_scans_total", "legendFormat": "Scans" }]
+      "targets": [{ "expr": "net_sentry_scans_total", "legendFormat": "Scans" }]
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -52,7 +52,7 @@
       "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "title": "Alerts",
       "type": "stat",
-      "targets": [{ "expr": "sum(btwifi_alerts_total)", "legendFormat": "Alerts" }]
+      "targets": [{ "expr": "sum(net_sentry_alerts_total)", "legendFormat": "Alerts" }]
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -64,7 +64,7 @@
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
       "title": "Devices by Type",
       "type": "timeseries",
-      "targets": [{ "expr": "btwifi_devices_total", "legendFormat": "{{device_type}}" }]
+      "targets": [{ "expr": "net_sentry_devices_total", "legendFormat": "{{device_type}}" }]
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -76,7 +76,7 @@
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
       "title": "Scan Duration",
       "type": "timeseries",
-      "targets": [{ "expr": "rate(btwifi_scan_duration_seconds_sum[5m]) / rate(btwifi_scan_duration_seconds_count[5m])", "legendFormat": "Avg Duration" }]
+      "targets": [{ "expr": "rate(net_sentry_scan_duration_seconds_sum[5m]) / rate(net_sentry_scan_duration_seconds_count[5m])", "legendFormat": "Avg Duration" }]
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -88,9 +88,9 @@
       "title": "Scanner Results",
       "type": "timeseries",
       "targets": [
-        { "expr": "btwifi_wifi_networks_found", "legendFormat": "WiFi" },
-        { "expr": "btwifi_bluetooth_devices_found", "legendFormat": "Bluetooth" },
-        { "expr": "btwifi_arp_hosts_found", "legendFormat": "ARP" }
+        { "expr": "net_sentry_wifi_networks_found", "legendFormat": "WiFi" },
+        { "expr": "net_sentry_bluetooth_devices_found", "legendFormat": "Bluetooth" },
+        { "expr": "net_sentry_arp_hosts_found", "legendFormat": "ARP" }
       ]
     },
     {
@@ -102,13 +102,46 @@
       "id": 8,
       "title": "New Devices Over Time",
       "type": "timeseries",
-      "targets": [{ "expr": "rate(btwifi_new_devices_total[1h])", "legendFormat": "{{device_type}}" }]
+      "targets": [{ "expr": "rate(net_sentry_new_devices_total[1h])", "legendFormat": "{{device_type}}" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "s" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "id": 9,
+      "title": "Per-Scanner Duration",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(net_sentry_scanner_duration_seconds_sum[5m]) / rate(net_sentry_scanner_duration_seconds_count[5m])", "legendFormat": "{{scanner}}" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "id": 10,
+      "title": "Unknown (Non-Whitelisted) Devices Over Time",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(net_sentry_unknown_devices_total[1h])", "legendFormat": "{{device_type}}" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "id": 12,
+      "title": "Scan Errors by Scanner",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(net_sentry_scan_errors_total[5m])", "legendFormat": "{{scanner_type}}" }]
     }
   ],
   "schemaVersion": 39,
-  "tags": ["btwifi", "iot", "network"],
+  "tags": ["net-sentry", "iot", "network"],
   "templating": { "list": [] },
   "time": { "from": "now-24h", "to": "now" },
-  "title": "BtWiFi Device Tracker",
-  "uid": "btwifi-overview"
+  "title": "Net Sentry Device Tracker",
+  "uid": "net-sentry-overview"
 }

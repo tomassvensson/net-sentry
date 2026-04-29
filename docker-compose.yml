@@ -8,8 +8,8 @@ services:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro
     environment:
-      - BTWIFI_CONTINUOUS=true
-      - BTWIFI_SCAN_INTERVAL=60
+      - NET_SENTRY_CONTINUOUS=true
+      - NET_SENTRY_SCAN_INTERVAL=60
       - DATABASE_URL=sqlite:///data/net-sentry.db
     # Required for Bluetooth and network scanning
     cap_add:

@@ -1,4 +1,4 @@
-"""Database session management for BtWiFi."""
+"""Database session management for Net Sentry."""
 
 import logging
 import os
@@ -13,7 +13,7 @@ from src.models import Base
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DB_URL = "sqlite:///btwifi.db"
+_DEFAULT_DB_URL = "sqlite:///net-sentry.db"
 
 
 def get_database_url() -> str:

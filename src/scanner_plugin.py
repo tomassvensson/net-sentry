@@ -1,12 +1,12 @@
-"""Scanner plugin interface for BtWiFi.
+"""Scanner plugin interface for Net Sentry.
 
 Third-party scanners can be registered via Python package entry points::
 
     # In the plugin's pyproject.toml:
-    [project.entry-points."btwifi.scanners"]
+    [project.entry-points."net_sentry.scanners"]
     my_scanner = "my_package.my_scanner:MyScanner"
 
-BtWiFi loads all registered plugins at startup via
+Net Sentry loads all registered plugins at startup via
 :func:`load_scanner_plugins`.
 
 Implementing a plugin
@@ -40,7 +40,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Entry-point group that plugins must register under.
-ENTRY_POINT_GROUP = "btwifi.scanners"
+ENTRY_POINT_GROUP = "net_sentry.scanners"
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ class ScannerPlugin(ABC):
     """Abstract base class for BtWiFi scanner plugins.
 
     Subclass this and register the subclass as an entry point under the
-    ``btwifi.scanners`` group.
+    ``net_sentry.scanners`` group.
 
     Class attributes
     ----------------
@@ -139,7 +139,7 @@ class ScannerPlugin(ABC):
 def load_scanner_plugins() -> list[ScannerPlugin]:
     """Discover and instantiate all registered scanner plugins.
 
-    Plugins are discovered via the ``btwifi.scanners`` entry-point group
+    Plugins are discovered via the ``net_sentry.scanners`` entry-point group
     (PEP 451 / importlib.metadata).  Only *available* plugins (where
     :meth:`ScannerPlugin.is_available` returns ``True``) are returned.
 

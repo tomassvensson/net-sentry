@@ -1,4 +1,4 @@
-"""JWT authentication for the BtWiFi API.
+"""JWT authentication for the Net Sentry API.
 
 Provides:
 - Token creation and validation using python-jose (MIT licence).

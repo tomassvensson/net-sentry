@@ -6,7 +6,7 @@ that are not associated with the network (probe requests, beacons, etc.).
 Requires:
 - A monitor-mode capable adapter (e.g. Goshyda AR9271)
 - Root/admin privileges
-- scapy (pip install btwifi[monitor])
+- scapy (pip install net-sentry[monitor])
 
 IMPORTANT: Devices detected this way do NOT get network access.
 The adapter operates in passive receive-only monitor mode.
@@ -72,7 +72,7 @@ def scan_monitor_mode(
     """
     if not is_scapy_available():
         logger.warning(
-            "scapy not installed. Install with: pip install btwifi[monitor]. Monitor mode scanning disabled."
+            "scapy not installed. Install with: pip install net-sentry[monitor]. Monitor mode scanning disabled."
         )
         return []
 

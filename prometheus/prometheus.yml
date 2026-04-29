@@ -19,10 +19,10 @@ global:
 
 scrape_configs:
   # BtWiFi device tracker
-  - job_name: btwifi
+  - job_name: net-sentry
     static_configs:
       - targets:
-          - btwifi:8000   # hostname inside Docker Compose network
+          - net-sentry:8000   # hostname inside Docker Compose network
           # - localhost:8000  # when running outside Docker
     metrics_path: /metrics
 

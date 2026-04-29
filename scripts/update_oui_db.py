@@ -67,7 +67,7 @@ def _download_with_backoff(url: str) -> bytes:
             logger.info("Attempt %d/%d: GET %s", attempt, _MAX_RETRIES, url)
             req = urllib.request.Request(
                 url,
-                headers={"User-Agent": "btwifi-oui-updater/1.0 (github.com/tomassvensson/btwf)"},
+                headers={"User-Agent": "net-sentry-oui-updater/1.0 (github.com/tomassvensson/net-sentry)"},
             )
             with urllib.request.urlopen(req, timeout=60) as response:  # noqa: S310
                 data: bytes = response.read()

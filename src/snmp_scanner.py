@@ -1,4 +1,4 @@
-"""SNMP scanner for BtWiFi.
+"""SNMP scanner for Net Sentry.
 
 Uses SNMPv2c to query devices on the local network for system information
 (sysDescr, sysName, sysContact, sysLocation) via the SNMPv2-MIB.

@@ -1,7 +1,7 @@
 # Database Migrations (Alembic)
 
 This document explains how to create, apply, and roll back database schema
-migrations for BtWiFi.  BtWiFi uses [Alembic](https://alembic.sqlalchemy.org/)
+migrations for Net Sentry.  Net Sentry uses [Alembic](https://alembic.sqlalchemy.org/)
 with a SQLAlchemy Core + ORM setup, and defaults to **SQLite** while optionally
 supporting **PostgreSQL** (see [docker-compose.yml](../../docker-compose.yml),
 `--profile postgres`).
@@ -23,7 +23,7 @@ Set the database URL either in `config.yaml` or via environment variable:
 
 ```bash
 # SQLite (default — no setup needed)
-export DATABASE_URL="sqlite:///data/btwifi.db"
+export DATABASE_URL="sqlite:///data/net-sentry.db"
 
 # PostgreSQL (requires the "postgres" profile in docker-compose)
 export DATABASE_URL="postgresql+pg8000://btwifi:btwifi@localhost:5432/btwifi"
@@ -165,7 +165,7 @@ alembic stamp head
    alembic upgrade head
    ```
 
-4. Start BtWiFi normally — `init_database()` will use the PostgreSQL URL.
+4. Start Net Sentry normally — `init_database()` will use the PostgreSQL URL.
 
 The `purge_old_windows()` function supports both databases; the `VACUUM`
 step is **silently skipped** on PostgreSQL (it is not needed in the same way,

@@ -24,10 +24,10 @@ class MqttPublisher:
         self,
         broker_host: str = "localhost",
         broker_port: int = 1883,
-        topic_prefix: str = "btwifi",
+        topic_prefix: str = "net-sentry",
         username: str | None = None,
         password: str | None = None,
-        client_id: str = "btwifi-scanner",
+        client_id: str = "net-sentry-scanner",
     ) -> None:
         """Initialize MQTT publisher.
 

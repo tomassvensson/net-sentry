@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="BtWiFi — track which WiFi, Bluetooth, and network devices are visible, when, and how strongly.">
-    <title>BtWiFi Device Tracker</title>
+    <meta name="description" content="Net Sentry — track which WiFi, Bluetooth, and network devices are visible, when, and how strongly.">
+    <title>Net Sentry Device Tracker</title>
     <link rel="icon" href="data:,">
     <link rel="preconnect" href="https://unpkg.com" crossorigin>
     <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js" defer></script>
@@ -135,7 +135,7 @@
 </head>
 <body>
     <div class="header">
-        <h1>BtWiFi Device Tracker</h1>
+        <h1>Net Sentry Device Tracker</h1>
         <div class="stats">
             <div class="stat">
                 <div class="stat-value">{{ total_devices }}</div>
@@ -219,10 +219,10 @@
             const current = html.getAttribute('data-theme');
             const next = current === 'dark' ? 'light' : 'dark';
             html.setAttribute('data-theme', next);
-            localStorage.setItem('btwifi-theme', next);
+            localStorage.setItem('Net Sentry-theme', next);
         }
         // Restore saved theme
-        const saved = localStorage.getItem('btwifi-theme');
+        const saved = localStorage.getItem('Net Sentry-theme');
         if (saved) document.documentElement.setAttribute('data-theme', saved);
     </script>
 </body>
