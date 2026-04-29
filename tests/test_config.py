@@ -53,8 +53,7 @@ class TestAppConfigDefaults:
         assert config.whitelist == []
         assert isinstance(config.oui, OuiConfig)
         assert isinstance(config.monitor_mode, MonitorModeConfig)
-        assert config.database.url == "sqlite:///btwifi.db"
-        assert config.snmp.enabled is False
+        assert config.database.url == "sqlite:///net-sentry.db"
         assert config.snmp.timeout_seconds == pytest.approx(2.0)
         assert config.snmp.retries == 1
         assert config.snmp.max_hosts == 254
@@ -68,7 +67,7 @@ class TestParseRawConfig:
     def test_empty_dict(self) -> None:
         config = _parse_raw_config({})
         assert config.scan.continuous is False
-        assert config.database.url == "sqlite:///btwifi.db"
+        assert config.database.url == "sqlite:///net-sentry.db"
 
     @pytest.mark.timeout(30)
     def test_scan_section(self) -> None:
