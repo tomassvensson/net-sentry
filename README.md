@@ -91,6 +91,13 @@ net-sentry
 net-sentry --once --rescan-ports
 ```
 
+By default this scans the configured shortlist of common TCP ports for speed.
+Use a full TCP range scan when you need parity with deeper port scanners:
+
+```bash
+net-sentry --once --full-port-scan
+```
+
 ### Export all known devices
 
 ```bash
@@ -109,6 +116,7 @@ Options:
   --once            Run a single scan cycle and exit (overrides config.scan.continuous)
   --continuous      Run in continuous loop (overrides config.scan.continuous)
   --rescan-ports    Force fresh TCP port scan for all discovered network devices
+  --full-port-scan  Scan TCP ports 1-65535; implies --rescan-ports
   --export csv|json Dump all known devices and exit (no scan)
   --output PATH     Write --export output to file instead of stdout
 ```

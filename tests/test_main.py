@@ -12,6 +12,7 @@ from src.main import (
     _best_name,
     _categorize_all_devices,
     _display_results,
+    _drop_ping_sweep_devices_with_arp_match,
     _execute_all_scanners,
     _format_signal,
     _format_time,
@@ -20,8 +21,12 @@ from src.main import (
     _import_and_scan_mdns,
     _import_and_scan_ssdp,
     _merge_bluetooth_devices,
+    _merge_network_devices_by_mac,
+    _PortScanTarget,
     _resolve_netbios,
+    _scan_port_targets_parallel,
     _shorten_vendor_name,
+    _subnets_safe_for_forced_host_discovery,
     _upsert_mdns_device,
     _upsert_network_device,
     _upsert_ssdp_device,
@@ -249,6 +254,33 @@ class TestDisplayResults:
         assert "TestVendor" in captured.out
         assert "Total devices:" in captured.out
 
+    @pytest.mark.timeout(30)
+    def test_hides_multicast_protocol_entries(self, in_memory_engine, capsys) -> None:
+        now = datetime.now(timezone.utc)
+        with get_session(in_memory_engine) as session:
+            session.add(
+                Device(
+                    mac_address="33:33:00:00:00:01",
+                    device_type="network",
+                    extra_info="IPv6: ff02::1 (Permanent)",
+                )
+            )
+            session.add(
+                VisibilityWindow(
+                    mac_address="33:33:00:00:00:01",
+                    first_seen=now,
+                    last_seen=now,
+                    scan_count=1,
+                )
+            )
+            session.flush()
+
+            _display_results(session)
+
+        captured = capsys.readouterr()
+        assert "No devices found" in captured.out
+        assert "33:33:00:00:00:01" not in captured.out
+
 
 class TestRunScan:
     """Integration-level tests for the full scan cycle."""
@@ -412,6 +444,113 @@ class TestMergeBluetoothDevices:
         assert len(merged) == 1
         assert merged[0].device_name == "Beacon"
         assert merged[0].is_paired is True
+
+
+class TestMergeNetworkDevices:
+    """Tests for network device merging after ping sweeps."""
+
+    @pytest.mark.timeout(30)
+    def test_merges_duplicate_mac(self) -> None:
+        from src.network_discovery import NetworkDevice
+
+        existing = [NetworkDevice(ip_address="192.168.0.10", mac_address="AA:BB:CC:DD:EE:FF")]
+        refreshed = [
+            NetworkDevice(
+                ip_address="192.168.0.20",
+                mac_address="AA:BB:CC:DD:EE:FF",
+                hostname="host",
+                interface="wifi",
+            )
+        ]
+
+        merged = _merge_network_devices_by_mac(existing, refreshed)
+
+        assert len(merged) == 1
+        assert merged[0].ip_address == "192.168.0.20"
+        assert merged[0].hostname == "host"
+        assert merged[0].interface == "wifi"
+
+    @pytest.mark.timeout(30)
+    def test_drops_ping_sweep_pseudo_device_when_arp_has_same_ip(self) -> None:
+        from src.network_discovery import NetworkDevice
+
+        arp_devices = [NetworkDevice(ip_address="192.168.0.10", mac_address="AA:BB:CC:DD:EE:FF")]
+        ping_devices = [
+            NetworkDevice(ip_address="192.168.0.10", mac_address="02:00:C0:A8:00:0A"),
+            NetworkDevice(ip_address="192.168.0.11", mac_address="02:00:C0:A8:00:0B"),
+        ]
+
+        remaining = _drop_ping_sweep_devices_with_arp_match(arp_devices, ping_devices)
+
+        assert [device.ip_address for device in remaining] == ["192.168.0.11"]
+
+
+class TestForcedHostDiscoverySubnets:
+    """Tests for implicit host-discovery subnet safety."""
+
+    @pytest.mark.timeout(30)
+    def test_keeps_small_subnets(self) -> None:
+        assert _subnets_safe_for_forced_host_discovery(["192.168.0.0/24"]) == ["192.168.0.0/24"]
+
+    @pytest.mark.timeout(30)
+    def test_skips_large_subnets(self) -> None:
+        assert _subnets_safe_for_forced_host_discovery(["10.0.0.0/8"]) == []
+
+    @pytest.mark.timeout(30)
+    def test_skips_medium_virtual_subnets(self) -> None:
+        assert _subnets_safe_for_forced_host_discovery(["172.17.32.0/20"]) == []
+
+    @pytest.mark.timeout(30)
+    def test_skips_host_routes_and_public_routes(self) -> None:
+        assert _subnets_safe_for_forced_host_discovery(["192.168.0.20/32", "155.4.74.144/32"]) == []
+
+    @pytest.mark.timeout(30)
+    def test_skips_invalid_subnets(self) -> None:
+        assert _subnets_safe_for_forced_host_discovery(["not-a-subnet"]) == []
+
+
+class TestParallelPortScan:
+    """Tests for host-level port scan parallelism."""
+
+    @patch("src.main.scan_host_ports")
+    @pytest.mark.timeout(30)
+    def test_scans_multiple_hosts_with_host_workers(self, mock_scan: MagicMock) -> None:
+        import threading
+        import time
+
+        from src.port_scanner import OpenPort
+
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def fake_scan(ip_address: str, **_kwargs):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return [OpenPort(80, "http")] if ip_address.endswith(".1") else []
+
+        mock_scan.side_effect = fake_scan
+        cfg = AppConfig()
+        cfg.port_scan.host_workers = 2
+        cfg.port_scan.ports = [80]
+
+        results = _scan_port_targets_parallel(
+            [
+                _PortScanTarget("AA:BB:CC:DD:EE:01", "192.168.0.1"),
+                _PortScanTarget("AA:BB:CC:DD:EE:02", "192.168.0.2"),
+                _PortScanTarget("AA:BB:CC:DD:EE:03", "192.168.0.3"),
+            ],
+            cfg,
+        )
+
+        assert len(results) == 3
+        assert max_active == 2
+        assert sum(len(result.open_ports) for result in results) == 1
 
 
 class TestHandleShutdown:
@@ -952,3 +1091,26 @@ class TestMainEntryPoint:
 
         assert cfg.port_scan.enabled is True
         mock_run_scan.assert_called_once()
+
+    @patch("src.main.run_scan")
+    @patch("src.main.load_config")
+    @pytest.mark.timeout(30)
+    def test_full_port_scan_sets_full_range_and_rescans(self, mock_cfg: MagicMock, mock_run_scan: MagicMock) -> None:
+        """--full-port-scan scans TCP 1-65535 and implies a forced rescan."""
+        import sys
+
+        cfg = AppConfig()
+        cfg.api.enabled = False
+        cfg.port_scan.enabled = False
+        mock_cfg.return_value = cfg
+
+        with patch.object(sys, "argv", ["btwifi", "--full-port-scan"]):
+            main()
+
+        assert cfg.port_scan.enabled is True
+        assert cfg.port_scan.ports[0] == 1
+        assert cfg.port_scan.ports[-1] == 65535
+        assert len(cfg.port_scan.ports) == 65535
+        assert cfg.port_scan.max_workers >= 200
+        assert cfg.port_scan.host_workers >= 4
+        mock_run_scan.assert_called_once_with(cfg, rescan_ports=True)

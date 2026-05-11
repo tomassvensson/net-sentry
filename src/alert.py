@@ -27,15 +27,15 @@ class WebhookDispatcher:
     Supports Slack-compatible payloads (default) and PagerDuty Events API v2.
     """
 
-    def __init__(self, url: str, format: str = "slack") -> None:
+    def __init__(self, url: str, payload_format: str = "slack") -> None:
         """Initialize dispatcher.
 
         Args:
             url: Webhook URL to POST alerts to.
-            format: Payload format — "slack" or "pagerduty".
+            payload_format: Payload format — "slack" or "pagerduty".
         """
         self._url = url
-        self._format = format
+        self._format = payload_format
 
     def dispatch(self, message: str, mac_address: str = "", device_type: str = "") -> None:
         """Send an alert payload to the webhook URL.

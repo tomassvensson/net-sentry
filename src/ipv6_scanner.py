@@ -11,6 +11,8 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from src.oui_lookup import is_multicast_mac, normalize_mac
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,10 +43,7 @@ def scan_ipv6_neighbors() -> list[Ipv6Neighbor]:
     """
     system = platform.system().lower()
     try:
-        if system == "windows":
-            neighbors = _scan_windows()
-        else:
-            neighbors = _scan_linux()
+        neighbors = _scan_windows() if system == "windows" else _scan_linux()
     except FileNotFoundError:
         logger.warning("IPv6 neighbor scan command not available on this platform")
         return []
@@ -108,11 +107,13 @@ def _parse_windows_output(output: str) -> list[Ipv6Neighbor]:
             mac_raw = entry_match.group(2)
             state = entry_match.group(3)
 
-            # Convert Windows MAC format (aa-bb-cc-dd-ee-ff) to standard
-            mac = mac_raw.replace("-", ":").upper()
+            try:
+                mac = normalize_mac(mac_raw)
+            except ValueError:
+                continue
 
-            # Skip multicast and incomplete entries
-            if mac == "FF:FF:FF:FF:FF:FF" or state.lower() == "unreachable":
+            # Skip multicast/protocol groups and incomplete entries.
+            if is_multicast_mac(mac) or state.lower() == "unreachable":
                 continue
 
             neighbors.append(
@@ -169,10 +170,15 @@ def _parse_linux_output(output: str) -> list[Ipv6Neighbor]:
         if match:
             ipv6 = match.group(1)
             interface = match.group(2)
-            mac = match.group(3).upper()
+            mac_raw = match.group(3)
             state = match.group(4)
 
-            if state.lower() == "failed":
+            try:
+                mac = normalize_mac(mac_raw)
+            except ValueError:
+                continue
+
+            if is_multicast_mac(mac) or state.lower() == "failed":
                 continue
 
             neighbors.append(
@@ -221,11 +227,8 @@ def _is_privacy_address(ipv6_address: str) -> bool:
     packed = addr.packed
     iid = packed[8:]  # bytes 8-15
 
-    # EUI-64 embeds FF:FE at positions 3-4 of the interface identifier
-    if iid[3] == 0xFF and iid[4] == 0xFE:
-        return False  # EUI-64 derived — not a privacy address
-
-    return True
+    # EUI-64 embeds FF:FE at positions 3-4 of the interface identifier.
+    return not (iid[3] == 0xFF and iid[4] == 0xFE)
 
 
 def deduplicate_privacy_addresses(neighbors: list[Ipv6Neighbor]) -> list[Ipv6Neighbor]:

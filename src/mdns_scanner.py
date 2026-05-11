@@ -10,6 +10,7 @@ import logging
 import select
 import socket
 import struct
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -119,11 +120,14 @@ def scan_mdns_services(timeout: float = _BROWSE_TIMEOUT, allowed_types: list[str
             logger.info("DNS-SD enumeration found %d additional service types", len(dynamic_service_types))
 
         # Step 2: Query all service types (static + discovered)
-        if allowed_types:
-            all_service_types = allowed_types
-        else:
-            all_service_types = list(_SERVICE_TYPES) + dynamic_service_types
-        for stype in all_service_types:
+        all_service_types = allowed_types or list(_SERVICE_TYPES) + dynamic_service_types
+        logger.info("mDNS querying %d service type(s).", len(all_service_types))
+        last_progress_log = time.monotonic()
+        for index, stype in enumerate(all_service_types, start=1):
+            now = time.monotonic()
+            if index == 1 or index == len(all_service_types) or now - last_progress_log >= 30:
+                logger.info("mDNS progress: querying service type %d/%d (%s).", index, len(all_service_types), stype)
+                last_progress_log = now
             raw_responses = _query_service_type(sock, stype, timeout)
             for raw in raw_responses:
                 records = _parse_dns_records(raw)

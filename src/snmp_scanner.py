@@ -27,6 +27,7 @@ Typical keys:
 """
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from ipaddress import IPv4Network
@@ -173,11 +174,26 @@ def query_snmp_device(
         return info
 
     try:
-        return asyncio.run(_do_get())
+        asyncio.get_running_loop()
     except RuntimeError:
-        # Already inside an event loop (e.g. called from FastAPI); run in executor
-        loop = asyncio.get_event_loop()
-        return loop.run_until_complete(_do_get())
+        return asyncio.run(_do_get())
+
+    result: SnmpDeviceInfo | None = None
+    error: BaseException | None = None
+
+    def _run_in_thread() -> None:
+        nonlocal error, result
+        try:
+            result = asyncio.run(_do_get())
+        except BaseException as exc:  # pragma: no cover - propagated below
+            error = exc
+
+    thread = threading.Thread(target=_run_in_thread, name="snmp-query", daemon=True)
+    thread.start()
+    thread.join()
+    if error is not None:
+        raise error
+    return result
 
 
 def scan_snmp_devices(

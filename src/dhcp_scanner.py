@@ -116,9 +116,7 @@ def _parse_lease_text(text: str, *, active_only: bool) -> list[NetworkDevice]:
             elif m := _ENDS_RE.match(cur):
                 try:
                     ts_str = m.group(1).replace("/", "-")  # 2024-01-02 10:00:00
-                    record["ends"] = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(
-                        tzinfo=timezone.utc
-                    )
+                    record["ends"] = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 except ValueError:
                     pass
             i += 1
@@ -135,9 +133,7 @@ def _parse_lease_text(text: str, *, active_only: bool) -> list[NetworkDevice]:
             best[mac] = record
         else:
             # Keep the lease with the later expiry time
-            if record["ends"] and (
-                existing["ends"] is None or record["ends"] > existing["ends"]
-            ):
+            if record["ends"] and (existing["ends"] is None or record["ends"] > existing["ends"]):
                 best[mac] = record
 
     devices = [

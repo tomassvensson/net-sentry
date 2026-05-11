@@ -13,11 +13,12 @@ import platform
 import re
 import socket
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from src.oui_lookup import is_randomized_mac, lookup_vendor, normalize_mac
+from src.oui_lookup import is_multicast_mac, is_randomized_mac, lookup_vendor, normalize_mac
 
 logger = logging.getLogger(__name__)
 
@@ -157,8 +158,7 @@ def _parse_arp_entry(
         return None
 
     # Skip multicast MACs (first byte odd)
-    first_byte = int(mac[:2], 16)
-    if first_byte & 0x01:
+    if is_multicast_mac(mac):
         return None
 
     if mac in seen_macs:
@@ -213,8 +213,7 @@ def _parse_ip_neigh_output(output: str) -> list[NetworkDevice]:
         except ValueError:
             continue
 
-        first_byte = int(mac[:2], 16)
-        if first_byte & 0x01:
+        if is_multicast_mac(mac):
             continue
 
         if mac in seen_macs:
@@ -245,9 +244,16 @@ def _ip_to_pseudo_mac(ip: str) -> str:
 
 def _ping_host(ip: str, timeout: float = 1.0) -> str | None:
     """Ping a single host. Returns the IP if it responds, None otherwise."""
+    system = platform.system().lower()
+    if system == "windows":
+        timeout_ms = max(1, int(timeout * 1000))
+        cmd = ["ping", "-n", "1", "-w", str(timeout_ms), str(ip)]
+    else:
+        cmd = ["ping", "-c", "1", "-W", str(max(1, int(timeout))), str(ip)]
+
     try:
         result = subprocess.run(
-            ["ping", "-c", "1", "-W", str(int(timeout)), str(ip)],
+            cmd,
             capture_output=True,
             timeout=timeout + 2,
             check=False,
@@ -303,12 +309,24 @@ def ping_sweep(
     logger.info("Ping sweep: %d hosts across %d subnet(s)...", len(targets), len(subnets))
 
     alive: list[str] = []
+    checked = 0
+    last_progress_log = time.monotonic()
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_ping_host, ip, timeout): ip for ip in targets}
         for future in as_completed(futures):
             result = future.result()
+            checked += 1
             if result:
                 alive.append(result)
+            now = time.monotonic()
+            if checked == len(targets) or now - last_progress_log >= 30:
+                logger.info(
+                    "Ping sweep progress: %d/%d host(s) checked, %d responded.",
+                    checked,
+                    len(targets),
+                    len(alive),
+                )
+                last_progress_log = now
 
     logger.info("Ping sweep complete: %d hosts responded.", len(alive))
 

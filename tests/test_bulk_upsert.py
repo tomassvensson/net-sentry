@@ -48,9 +48,7 @@ class TestBulkUpsertNetworkDevices:
 
     @pytest.mark.timeout(10)
     def test_updates_existing_device(self, db_session: Session) -> None:
-        db_session.add(
-            Device(mac_address="AA:BB:CC:DD:EE:FF", device_type="network", ip_address="10.0.0.1")
-        )
+        db_session.add(Device(mac_address="AA:BB:CC:DD:EE:FF", device_type="network", ip_address="10.0.0.1"))
         db_session.commit()
 
         # Same MAC, new IP

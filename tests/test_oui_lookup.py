@@ -5,6 +5,7 @@ import pytest
 from src.oui_lookup import (
     _load_oui_csv,
     get_oui_prefix,
+    is_multicast_mac,
     is_randomized_mac,
     lookup_vendor,
     normalize_mac,
@@ -149,6 +150,26 @@ class TestIsRandomizedMac:
     @pytest.mark.timeout(30)
     def test_invalid_mac_returns_false(self) -> None:
         assert is_randomized_mac("invalid") is False
+
+
+class TestIsMulticastMac:
+    """Tests for multicast/group-addressed MAC detection."""
+
+    @pytest.mark.timeout(30)
+    def test_ipv6_multicast_mac(self) -> None:
+        assert is_multicast_mac("33:33:00:00:00:01") is True
+
+    @pytest.mark.timeout(30)
+    def test_broadcast_mac(self) -> None:
+        assert is_multicast_mac("FF:FF:FF:FF:FF:FF") is True
+
+    @pytest.mark.timeout(30)
+    def test_unicast_mac(self) -> None:
+        assert is_multicast_mac("02:11:22:33:44:55") is False
+
+    @pytest.mark.timeout(30)
+    def test_invalid_mac_returns_false(self) -> None:
+        assert is_multicast_mac("invalid") is False
 
 
 class TestLoadOuiCsv:

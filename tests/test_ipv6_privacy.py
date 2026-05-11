@@ -70,8 +70,6 @@ class TestDeduplicatePrivacyAddresses:
         eui64 = _make_neighbor("2606:2800::a8bb:ccff:fedd:eeff", mac="AA:BB:CC:DD:EE:FF")
         privacy = _make_neighbor("2606:2800::1234:5678:9abc:def0", mac="AA:BB:CC:DD:EE:FF")
         result = deduplicate_privacy_addresses([eui64, privacy])
-        # Should keep only EUI-64 derived
-        global_entries = [n for n in result if not _is_privacy_address(n.ipv6_address) or True]
         # Specifically: only one global entry for this MAC
         from ipaddress import IPv6Address
 
