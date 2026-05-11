@@ -266,7 +266,7 @@ def bulk_upsert_network_devices(session: Session, devices: list[NetworkDevice]) 
         return 0
 
     # Determine dialect to pick the right insert strategy
-    dialect_name = sa_inspect(session.get_bind()).dialect.name  # type: ignore[union-attr]
+    dialect_name = sa_inspect(session.get_bind()).dialect.name
 
     rows = [
         {

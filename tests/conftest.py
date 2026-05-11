@@ -43,9 +43,7 @@ def assert_asyncio_mode_strict(pytestconfig: pytest.Config) -> None:
     is not 'strict', preventing subtle test-order bugs caused by implicitly-async
     fixtures or tests running in the wrong event-loop context.
     """
-    asyncio_mode = pytestconfig.getoption("--asyncio-mode", default=None) or pytestconfig.getini(
-        "asyncio_mode"
-    )
+    asyncio_mode = pytestconfig.getoption("--asyncio-mode", default=None) or pytestconfig.getini("asyncio_mode")
     assert asyncio_mode == "strict", (
         f"pytest-asyncio must be configured with asyncio_mode='strict', got {asyncio_mode!r}. "
         "Check pyproject.toml [tool.pytest.ini_options] asyncio_mode = 'strict'."
