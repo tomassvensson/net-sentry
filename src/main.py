@@ -956,19 +956,16 @@ def _scan_port_targets_parallel(
             results.append(result)
             if result.open_ports:
                 logger.info(
-                    "Port scan found %d open port(s) on %s in %.1fs.",
+                    "Port scan found %d open port(s) on one host in %.1fs.",
                     len(result.open_ports),
-                    result.ip_address,
                     result.elapsed_seconds,
                 )
                 logger.debug(
-                    "Open ports on %s (%s): %s",
-                    result.ip_address,
-                    result.mac_address,
+                    "Open ports found on one host: %s",
                     " ".join(str(port) for port in result.open_ports),
                 )
             else:
-                logger.debug("Port scan found no open ports on %s in %.1fs.", result.ip_address, result.elapsed_seconds)
+                logger.debug("Port scan found no open ports on one host in %.1fs.", result.elapsed_seconds)
 
     return results
 
@@ -976,9 +973,7 @@ def _scan_port_targets_parallel(
 def _scan_port_target(target: _PortScanTarget, config: AppConfig) -> _PortScanResult:
     """Scan TCP ports for one host."""
     logger.debug(
-        "Port scan started for %s (%s) across %d TCP port(s).",
-        target.ip_address,
-        target.mac_address,
+        "Port scan started for one host across %d TCP port(s).",
         len(config.port_scan.ports),
     )
     scan_start = time.time()
