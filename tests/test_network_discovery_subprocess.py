@@ -202,6 +202,15 @@ class TestPingHost:
         result = _ping_host("192.168.1.1")
         assert result == "192.168.1.1"
 
+    @patch("src.network_discovery.platform.system", return_value="Windows")
+    @patch("src.network_discovery.subprocess.run")
+    @pytest.mark.timeout(30)
+    def test_uses_windows_ping_flags(self, mock_run, _mock_system) -> None:
+        mock_run.return_value = MagicMock(returncode=0)
+        result = _ping_host("192.168.1.1", timeout=0.5)
+        assert result == "192.168.1.1"
+        assert mock_run.call_args.args[0] == ["ping", "-n", "1", "-w", "500", "192.168.1.1"]
+
     @patch("src.network_discovery.subprocess.run")
     @pytest.mark.timeout(30)
     def test_no_response(self, mock_run) -> None:

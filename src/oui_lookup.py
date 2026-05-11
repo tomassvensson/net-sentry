@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import functools
+import inspect
 import logging
 import re
 import warnings
@@ -777,9 +778,20 @@ def lookup_vendor(mac_address: str) -> str | None:
     _init_mac_lookup()
     if _mac_lookup is not None:
         try:
-            vendor: str | None = _mac_lookup.lookup(normalized)
-            if vendor:
-                return vendor
+            lookup = _mac_lookup.lookup
+            lookup_result = None
+            if inspect.iscoroutinefunction(lookup):
+                logger.debug("mac-vendor-lookup uses async lookup; trying CSV fallback.")
+            else:
+                lookup_result = lookup(normalized)
+                if inspect.isawaitable(lookup_result):
+                    close = getattr(lookup_result, "close", None)
+                    if callable(close):
+                        close()
+                    logger.debug("mac-vendor-lookup returned an async lookup; trying CSV fallback.")
+                    lookup_result = None
+            if lookup_result:
+                return str(lookup_result)
         except Exception:
             logger.debug("mac-vendor-lookup failed, trying CSV fallback.")
 
@@ -813,3 +825,25 @@ def is_randomized_mac(mac_address: str) -> bool:
 
     first_byte = int(normalized[:2], 16)
     return bool(first_byte & 0x02)
+
+
+def is_multicast_mac(mac_address: str) -> bool:
+    """Check if a MAC address is multicast/group addressed.
+
+    The least-significant bit of the first octet marks Ethernet multicast.
+    IPv6 neighbor tables commonly contain ``33:33:*`` multicast mappings;
+    those are protocol groups, not devices.
+
+    Args:
+        mac_address: MAC address in any common format.
+
+    Returns:
+        True if the MAC is multicast/group addressed.
+    """
+    try:
+        normalized = normalize_mac(mac_address)
+    except ValueError:
+        return False
+
+    first_byte = int(normalized[:2], 16)
+    return bool(first_byte & 0x01)

@@ -150,6 +150,7 @@ api:
 # TCP Port scanning
 # Cached results are stored per-device in the database.
 # Use --rescan-ports on the CLI to force a fresh scan.
+# Use --full-port-scan to temporarily scan TCP ports 1-65535.
 # ---------------------------------------------------------------------------
 port_scan:
   enabled: false
@@ -159,6 +160,8 @@ port_scan:
   timeout_seconds: 0.5
   # Max concurrent port probes per host.
   max_workers: 20
+  # Max devices scanned in parallel during the port scan phase.
+  host_workers: 4
 
 # ---------------------------------------------------------------------------
 # Home Assistant integration

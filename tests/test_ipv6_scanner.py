@@ -26,12 +26,13 @@ Interface 12: Wi-Fi
 
 Internet Address                              Physical Address   Type
 --------------------------------------------  -----------------  -----------
-fe80::abcd                                    11-22-33-44-55-66  Reachable
+fe80::abcd                                    12-22-33-44-55-66  Reachable
 """
 
 LINUX_OUTPUT = """\
 fe80::1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE
-fe80::2 dev eth0 lladdr 11:22:33:44:55:66 STALE
+fe80::2 dev eth0 lladdr 12:22:33:44:55:66 STALE
+ff02::1 dev eth0 lladdr 33:33:00:00:00:01 PERMANENT
 fe80::bad dev eth0 lladdr 00:00:00:00:00:01 FAILED
 fe80::3 dev wlan0 lladdr cc:dd:ee:ff:00:11 DELAY
 """
@@ -43,12 +44,13 @@ class TestParseWindowsOutput:
     @pytest.mark.timeout(30)
     def test_parses_multiple_interfaces(self) -> None:
         neighbors = _parse_windows_output(WINDOWS_OUTPUT)
-        # Should get: fe80::1, fe80::6e38..., ff02::1, fe80::abcd
-        # Excludes: ff:ff:ff:ff:ff:ff (broadcast) and Unreachable
+        # Should get: fe80::1, fe80::6e38..., fe80::abcd.
+        # Excludes multicast, broadcast and Unreachable entries.
         macs = {n.mac_address for n in neighbors}
         assert "00:11:22:33:44:55" in macs
         assert "AA:BB:CC:DD:EE:FF" in macs
-        assert "11:22:33:44:55:66" in macs
+        assert "12:22:33:44:55:66" in macs
+        assert "33:33:00:00:00:01" not in macs
         assert "FF:FF:FF:FF:FF:FF" not in macs
 
     @pytest.mark.timeout(30)
@@ -82,6 +84,11 @@ class TestParseWindowsOutput:
         neighbors = _parse_windows_output(WINDOWS_OUTPUT)
         states = {n.state.lower() for n in neighbors}
         assert "unreachable" not in states
+
+    @pytest.mark.timeout(30)
+    def test_skips_multicast_entries(self) -> None:
+        neighbors = _parse_windows_output(WINDOWS_OUTPUT)
+        assert all(not n.mac_address.startswith("33:33:") for n in neighbors)
 
 
 class TestParseLinuxOutput:

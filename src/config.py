@@ -80,7 +80,8 @@ class PortScanConfig:
     enabled: bool = False
     ports: list[int] = field(default_factory=lambda: [21, 22, 23, 25, 53, 80, 443, 445, 3389, 8080, 8443])
     timeout_seconds: float = 0.5
-    max_workers: int = 20
+    max_workers: int = 20  # Concurrent port probes per host.
+    host_workers: int = 4  # Concurrent hosts scanned during the port phase.
 
 
 @dataclass
@@ -348,8 +349,7 @@ def _maybe_rotate_jwt_secret(config: AppConfig, config_path: str) -> None:
     new_secret = secrets.token_urlsafe(32)
     config.api.jwt_secret = new_secret
     logger.warning(
-        "JWT secret was set to the insecure placeholder. "
-        "A random secret has been generated and will be written to %s.",
+        "JWT secret was set to the insecure placeholder. A random secret has been generated and will be written to %s.",
         config_path,
     )
 
@@ -446,6 +446,7 @@ def _parse_raw_config(raw: dict) -> AppConfig:
             ports=po.get("ports", config.port_scan.ports),
             timeout_seconds=po.get("timeout_seconds", config.port_scan.timeout_seconds),
             max_workers=po.get("max_workers", config.port_scan.max_workers),
+            host_workers=po.get("host_workers", config.port_scan.host_workers),
         )
 
     if "home_assistant" in raw:
