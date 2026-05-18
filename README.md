@@ -1,5 +1,10 @@
 # Net Sentry — Network Device Visibility Tracker
 
+[![CI](https://github.com/tomassvensson/net-sentry/actions/workflows/ci.yml/badge.svg)](https://github.com/tomassvensson/net-sentry/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/tomassvensson/net-sentry/actions/workflows/codeql.yml/badge.svg)](https://github.com/tomassvensson/net-sentry/actions/workflows/codeql.yml)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=tomassvensson_btwf&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=tomassvensson_btwf)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=tomassvensson_btwf&metric=coverage)](https://sonarcloud.io/summary/new_code?id=tomassvensson_btwf)
+
 > GitHub repo: <https://github.com/tomassvensson/net-sentry>
 >
 > **⚠️ Legal & Ethics Notice**
@@ -252,9 +257,17 @@ It is auto-provisioned when you start the dashboards stack (see Docker section b
 
 ### Minimal stack (scanner only)
 
+**Linux:**
 ```bash
 docker compose up net-sentry
 ```
+
+**Windows (Docker Desktop):**
+```bash
+docker compose -f docker-compose.yml -f docker-compose.windows.yml up net-sentry
+```
+> The Windows override removes `network_mode: host` and the `/dev/bluetooth` device mount, which are Linux-only.
+> Port 8000 is mapped to localhost. Bluetooth and raw-socket scanning is limited on Windows.
 
 ### Full stack (scanner + Prometheus + Grafana)
 

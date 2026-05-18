@@ -234,6 +234,32 @@ def _run_ble_discovery(timeout_seconds: float, scanning_mode: Literal["active", 
     return result
 
 
+def _process_ble_item(
+    ble_device: object,
+    advertisement: object | None,
+    seen_macs: set[str],
+) -> BluetoothDevice | None:
+    """Convert a single BLE discovery item to a BluetoothDevice, or None if invalid/duplicate."""
+    mac_address = getattr(ble_device, "address", "")
+    if not mac_address:
+        return None
+    try:
+        normalized_mac = normalize_mac(mac_address)
+    except ValueError:
+        return None
+    if normalized_mac in seen_macs:
+        return None
+    seen_macs.add(normalized_mac)
+    device_name = getattr(ble_device, "name", None) or getattr(advertisement, "local_name", None)
+    return BluetoothDevice(
+        mac_address=normalized_mac,
+        device_name=device_name,
+        is_connected=False,
+        is_paired=False,
+        device_class="BLE",
+    )
+
+
 def _parse_ble_discovery_results(discovered_devices: object) -> list[BluetoothDevice]:
     """Convert bleak discovery output into BluetoothDevice objects."""
     parsed_items: list[tuple[object, object | None]] = []
@@ -250,32 +276,12 @@ def _parse_ble_discovery_results(discovered_devices: object) -> list[BluetoothDe
     else:
         return []
 
-    devices: list[BluetoothDevice] = []
     seen_macs: set[str] = set()
-
+    devices: list[BluetoothDevice] = []
     for ble_device, advertisement in parsed_items:
-        mac_address = getattr(ble_device, "address", "")
-        if not mac_address:
-            continue
-        try:
-            normalized_mac = normalize_mac(mac_address)
-        except ValueError:
-            continue
-        if normalized_mac in seen_macs:
-            continue
-        seen_macs.add(normalized_mac)
-
-        device_name = getattr(ble_device, "name", None) or getattr(advertisement, "local_name", None)
-        devices.append(
-            BluetoothDevice(
-                mac_address=normalized_mac,
-                device_name=device_name,
-                is_connected=False,
-                is_paired=False,
-                device_class="BLE",
-            )
-        )
-
+        device = _process_ble_item(ble_device, advertisement, seen_macs)
+        if device is not None:
+            devices.append(device)
     return devices
 
 

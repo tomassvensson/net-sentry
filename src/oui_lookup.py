@@ -753,6 +753,28 @@ def _cached_lookup_by_prefix(prefix: str) -> str | None:
     return _BUILTIN_OUI.get(prefix)
 
 
+def _try_mac_vendor_lookup(normalized: str) -> str | None:
+    """Try the mac-vendor-lookup library; returns vendor string or ``None``."""
+    if _mac_lookup is None:
+        return None
+    try:
+        lookup = _mac_lookup.lookup
+        if inspect.iscoroutinefunction(lookup):
+            logger.debug("mac-vendor-lookup uses async lookup; trying CSV fallback.")
+            return None
+        lookup_result = lookup(normalized)
+        if inspect.isawaitable(lookup_result):
+            close = getattr(lookup_result, "close", None)
+            if callable(close):
+                close()
+            logger.debug("mac-vendor-lookup returned an async lookup; trying CSV fallback.")
+            return None
+        return str(lookup_result) if lookup_result else None
+    except Exception:
+        logger.debug("mac-vendor-lookup failed, trying CSV fallback.")
+        return None
+
+
 def lookup_vendor(mac_address: str) -> str | None:
     """Look up the vendor/manufacturer for a MAC address.
 
@@ -776,24 +798,9 @@ def lookup_vendor(mac_address: str) -> str | None:
 
     # 1 — Try the full mac-vendor-lookup library
     _init_mac_lookup()
-    if _mac_lookup is not None:
-        try:
-            lookup = _mac_lookup.lookup
-            lookup_result = None
-            if inspect.iscoroutinefunction(lookup):
-                logger.debug("mac-vendor-lookup uses async lookup; trying CSV fallback.")
-            else:
-                lookup_result = lookup(normalized)
-                if inspect.isawaitable(lookup_result):
-                    close = getattr(lookup_result, "close", None)
-                    if callable(close):
-                        close()
-                    logger.debug("mac-vendor-lookup returned an async lookup; trying CSV fallback.")
-                    lookup_result = None
-            if lookup_result:
-                return str(lookup_result)
-        except Exception:
-            logger.debug("mac-vendor-lookup failed, trying CSV fallback.")
+    vendor = _try_mac_vendor_lookup(normalized)
+    if vendor:
+        return vendor
 
     # 2+3 — Try the local IEEE OUI CSV then built-in table (cached per prefix)
     prefix = get_oui_prefix(normalized)

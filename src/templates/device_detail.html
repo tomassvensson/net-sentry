@@ -57,7 +57,7 @@
         }
         .card h2 { font-size: 1rem; margin-bottom: 1rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
         .meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.8rem; }
-        .meta-item label { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; display: block; margin-bottom: 0.2rem; }
+        .meta-item label, .meta-item .meta-label { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; display: block; margin-bottom: 0.2rem; }
         .meta-item span { font-size: 0.9rem; font-family: monospace; }
         .badge {
             display: inline-block; padding: 0.2em 0.6em; border-radius: 4px;
@@ -92,7 +92,7 @@
         <div class="breadcrumb"><a href="/">← Back to Dashboard</a></div>
         <h1>Device Detail</h1>
     </div>
-    <button class="theme-btn" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'">
+    <button class="theme-btn">
         Toggle theme
     </button>
 </div>
@@ -103,11 +103,11 @@
         <h2>Device Info</h2>
         <div class="meta-grid">
             <div class="meta-item">
-                <label>MAC Address</label>
+                <span class="meta-label">MAC Address</span>
                 <span>{{ device.mac_address }}</span>
             </div>
             <div class="meta-item">
-                <label>Type</label>
+                <span class="meta-label">Type</span>
                 <span>
                     {% if 'wifi' in device.device_type %}
                     <span class="badge badge-wifi">{{ device.device_type }}</span>
@@ -124,58 +124,58 @@
             </div>
             {% if device.device_name or device.ssid %}
             <div class="meta-item">
-                <label>Name / SSID</label>
+                <span class="meta-label">Name / SSID</span>
                 <span>{{ device.device_name or device.ssid }}</span>
             </div>
             {% endif %}
             {% if device.vendor %}
             <div class="meta-item">
-                <label>Vendor</label>
+                <span class="meta-label">Vendor</span>
                 <span>{{ device.vendor }}</span>
             </div>
             {% endif %}
             {% if device.hostname %}
             <div class="meta-item">
-                <label>Hostname</label>
+                <span class="meta-label">Hostname</span>
                 <span>{{ device.hostname }}</span>
             </div>
             {% endif %}
             {% if device.ip_address %}
             <div class="meta-item">
-                <label>IP Address</label>
+                <span class="meta-label">IP Address</span>
                 <span>{{ device.ip_address }}</span>
             </div>
             {% endif %}
             {% if device.category %}
             <div class="meta-item">
-                <label>Category</label>
+                <span class="meta-label">Category</span>
                 <span>{{ device.category }}</span>
             </div>
             {% endif %}
             {% if device.channel %}
             <div class="meta-item">
-                <label>Channel</label>
+                <span class="meta-label">Channel</span>
                 <span>{{ device.channel }}</span>
             </div>
             {% endif %}
             <div class="meta-item">
-                <label>Reconnects</label>
+                <span class="meta-label">Reconnects</span>
                 <span>{{ device.reconnect_count }}</span>
             </div>
             {% if device.fingerprint_confidence is not none %}
             <div class="meta-item">
-                <label>FP Confidence</label>
+                <span class="meta-label">FP Confidence</span>
                 <span class="badge {% if device.fingerprint_confidence >= 0.8 %}badge-success{% elif device.fingerprint_confidence >= 0.5 %}badge-warning{% else %}badge-danger{% endif %}">
                     {{ "%.0f"|format(device.fingerprint_confidence * 100) }}%
                 </span>
             </div>
             {% endif %}
             <div class="meta-item">
-                <label>First Seen (ever)</label>
+                <span class="meta-label">First Seen (ever)</span>
                 <span>{{ device.created_at }}</span>
             </div>
             <div class="meta-item">
-                <label>Last Updated</label>
+                <span class="meta-label">Last Updated</span>
                 <span>{{ device.updated_at }}</span>
             </div>
         </div>
@@ -193,12 +193,12 @@
             {% endif %}
             <div style="flex:1;min-width:280px;">
                 <form id="notes-form" style="display:flex;flex-direction:column;gap:0.6rem;">
-                    <label style="font-size:0.8rem;color:var(--text-dim);">Label / Alias</label>
+                    <label for="label-input" style="font-size:0.8rem;color:var(--text-dim);">Label / Alias</label>
                     <input id="label-input" type="text" maxlength="255"
                            value="{{ device.label or '' }}"
                            placeholder="e.g. Living-room TV"
                            style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:0.4rem 0.6rem;font-size:0.9rem;">
-                    <label style="font-size:0.8rem;color:var(--text-dim);">Notes</label>
+                    <label for="notes-input" style="font-size:0.8rem;color:var(--text-dim);">Notes</label>
                     <textarea id="notes-input" rows="3" maxlength="4096"
                               placeholder="Any notes about this device…"
                               style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:0.4rem 0.6rem;font-size:0.9rem;resize:vertical;">{{ device.notes or '' }}</textarea>
@@ -208,7 +208,7 @@
             </div>
             <div style="min-width:200px;">
                 <form id="photo-form" style="display:flex;flex-direction:column;gap:0.6rem;">
-                    <label style="font-size:0.8rem;color:var(--text-dim);">Upload Photo</label>
+                    <label for="photo-input" style="font-size:0.8rem;color:var(--text-dim);">Upload Photo</label>
                     <input id="photo-input" type="file" accept=".jpg,.jpeg,.png,.gif,.webp"
                            style="color:var(--text);font-size:0.85rem;">
                     <button type="button" id="upload-photo-btn" class="btn" style="width:fit-content;">Upload</button>
@@ -250,13 +250,13 @@
 <script>
     const _THEME_KEY = 'net-sentry-theme';
     function toggleTheme() {
-        const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-        document.documentElement.dataset.theme = next;
+        const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
         localStorage.setItem(_THEME_KEY, next);
     }
     // Restore saved theme on page load (G: dark-mode persistence)
     const _savedTheme = localStorage.getItem(_THEME_KEY);
-    if (_savedTheme) document.documentElement.dataset.theme = _savedTheme;
+    if (_savedTheme) document.documentElement.setAttribute('data-theme', _savedTheme);
     // Wire the toggle button to use localStorage
     document.addEventListener('DOMContentLoaded', function() {
         const btn = document.querySelector('.theme-btn');

@@ -97,6 +97,53 @@ def _resolve_mac_from_ip(ip_address: str) -> str | None:
     return None
 
 
+async def _snmp_get_async(
+    ip_address: str,
+    community: str,
+    port: int,
+    timeout: int,
+    retries: int,
+    var_binds: list[Any],
+) -> "SnmpDeviceInfo | None":
+    """Async SNMP GET coroutine (requires pysnmp to be importable)."""
+    from pysnmp.hlapi.asyncio import (  # noqa: PLC0415
+        CommunityData,
+        ContextData,
+        SnmpEngine,
+        UdpTransportTarget,
+        getCmd,
+    )
+
+    engine = SnmpEngine()
+    transport = UdpTransportTarget((ip_address, port), timeout=timeout, retries=retries)
+    auth = CommunityData(community, mpModel=1)  # mpModel=1 → SNMPv2c
+
+    error_indication, error_status, error_index, result = await getCmd(
+        engine, auth, transport, ContextData(), *var_binds
+    )
+
+    if error_indication:
+        logger.debug("SNMP error for %s: %s", ip_address, error_indication)
+        return None
+    if error_status:
+        idx = int(error_index) - 1 if error_index else None
+        faulty_oid = result[idx][0] if idx is not None and 0 <= idx < len(result) else "?"
+        logger.debug("SNMP error-status for %s: %s at %s", ip_address, error_status.prettyPrint(), faulty_oid)
+        return None
+
+    raw: dict[str, str] = {}
+    for var_bind in result:
+        oid_str, val = str(var_bind[0]), str(var_bind[1])
+        raw[oid_str] = val
+
+    info = SnmpDeviceInfo(ip_address=ip_address, raw=raw)
+    info.sys_descr = raw.get(_OID_SYS_DESCR, raw.get(f"{_OID_SYS_DESCR}.0", ""))
+    info.sys_name = raw.get(_OID_SYS_NAME, raw.get(f"{_OID_SYS_NAME}.0", ""))
+    info.sys_contact = raw.get(_OID_SYS_CONTACT, raw.get(f"{_OID_SYS_CONTACT}.0", ""))
+    info.sys_location = raw.get(_OID_SYS_LOCATION, raw.get(f"{_OID_SYS_LOCATION}.0", ""))
+    return info
+
+
 def query_snmp_device(
     ip_address: str,
     community: str = "public",
@@ -122,70 +169,29 @@ def query_snmp_device(
     import asyncio  # noqa: PLC0415
 
     try:
-        from pysnmp.hlapi.asyncio import (
-            CommunityData,
-            ContextData,
-            ObjectIdentity,
-            ObjectType,
-            SnmpEngine,
-            UdpTransportTarget,
-            getCmd,
-        )
+        from pysnmp.hlapi.asyncio import ObjectIdentity, ObjectType  # noqa: PLC0415
     except ImportError:
         logger.warning("pysnmp is not installed — SNMP scanning unavailable")
         return None
 
     var_binds: list[Any] = [ObjectType(ObjectIdentity(oid)) for oid in oids]
 
-    async def _do_get() -> SnmpDeviceInfo | None:
-        engine = SnmpEngine()
-        transport = UdpTransportTarget((ip_address, port), timeout=timeout, retries=retries)
-        auth = CommunityData(community, mpModel=1)  # mpModel=1 → SNMPv2c
-
-        error_indication, error_status, error_index, result = await getCmd(
-            engine, auth, transport, ContextData(), *var_binds
-        )
-
-        if error_indication:
-            logger.debug("SNMP error for %s: %s", ip_address, error_indication)
-            return None
-        if error_status:
-            idx = int(error_index) - 1 if error_index else None
-            faulty_oid = result[idx][0] if idx is not None and 0 <= idx < len(result) else "?"
-            logger.debug(
-                "SNMP error-status for %s: %s at %s",
-                ip_address,
-                error_status.prettyPrint(),
-                faulty_oid,
-            )
-            return None
-
-        raw: dict[str, str] = {}
-        for var_bind in result:
-            oid_str, val = str(var_bind[0]), str(var_bind[1])
-            raw[oid_str] = val
-
-        info = SnmpDeviceInfo(ip_address=ip_address, raw=raw)
-        info.sys_descr = raw.get(_OID_SYS_DESCR, raw.get(f"{_OID_SYS_DESCR}.0", ""))
-        info.sys_name = raw.get(_OID_SYS_NAME, raw.get(f"{_OID_SYS_NAME}.0", ""))
-        info.sys_contact = raw.get(_OID_SYS_CONTACT, raw.get(f"{_OID_SYS_CONTACT}.0", ""))
-        info.sys_location = raw.get(_OID_SYS_LOCATION, raw.get(f"{_OID_SYS_LOCATION}.0", ""))
-
-        return info
+    async def _coro() -> SnmpDeviceInfo | None:
+        return await _snmp_get_async(ip_address, community, port, timeout, retries, var_binds)
 
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(_do_get())
+        return asyncio.run(_coro())
 
     result: SnmpDeviceInfo | None = None
-    error: BaseException | None = None
+    error: Exception | None = None
 
     def _run_in_thread() -> None:
         nonlocal error, result
         try:
-            result = asyncio.run(_do_get())
-        except BaseException as exc:  # pragma: no cover - propagated below
+            result = asyncio.run(_coro())
+        except Exception as exc:  # noqa: BLE001 — re-raised in caller
             error = exc
 
     thread = threading.Thread(target=_run_in_thread, name="snmp-query", daemon=True)

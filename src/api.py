@@ -20,7 +20,7 @@ from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,6 +51,9 @@ templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
 
 # Module-level engine reference (set during lifespan)
 _engine = None
+
+# Shared string constants
+_DEVICE_NOT_FOUND = "Device not found"
 
 # Rate limiter (key by client IP)
 limiter = Limiter(key_func=get_remote_address)
@@ -244,6 +247,10 @@ def get_db() -> Generator[Session, None, None]:
         yield session
 
 
+# Reusable dependency type aliases (Annotated pattern — FastAPI best practice)
+DbSession = Annotated[Session, Depends(get_db)]
+AuthUser = Annotated[str | None, Depends(require_auth)]
+
 # ---------------------------------------------------------------------------
 # API v1 router
 # ---------------------------------------------------------------------------
@@ -302,11 +309,11 @@ def prometheus_metrics() -> str:
 @limiter.limit("100/minute")
 def list_devices(
     request: Request,
-    page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(50, ge=1, le=200, description="Items per page"),
-    device_type: str | None = Query(None, description="Filter by device type"),
-    session: Session = Depends(get_db),
-    _user: str | None = Depends(require_auth),
+    page: Annotated[int, Query(ge=1, description="Page number")] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200, description="Items per page")] = 50,
+    device_type: Annotated[str | None, Query(description="Filter by device type")] = None,
+    session: DbSession = None,  # type: ignore[assignment]
+    _user: AuthUser = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """List all known devices with pagination.
 
@@ -341,8 +348,8 @@ def list_devices(
 def get_device(
     request: Request,
     mac_address: str,
-    session: Session = Depends(get_db),
-    _user: str | None = Depends(require_auth),
+    session: DbSession = None,  # type: ignore[assignment]
+    _user: AuthUser = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Get device details by MAC address.
 
@@ -356,7 +363,7 @@ def get_device(
     """
     device = session.query(Device).filter_by(mac_address=mac_address).first()
     if device is None:
-        return {"error": "Device not found", "mac_address": mac_address}
+        return {"error": _DEVICE_NOT_FOUND, "mac_address": mac_address}
 
     latest_window = (
         session.query(VisibilityWindow)
@@ -375,10 +382,10 @@ def get_device(
 def get_device_windows(
     request: Request,
     mac_address: str,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
-    session: Session = Depends(get_db),
-    _user: str | None = Depends(require_auth),
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+    session: DbSession = None,  # type: ignore[assignment]
+    _user: AuthUser = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Get visibility windows for a device.
 
@@ -417,10 +424,10 @@ def get_device_windows(
 def update_device_notes(
     request: Request,
     mac_address: str,
-    label: str | None = Form(default=None),
-    notes: str | None = Form(default=None),
-    session: Session = Depends(get_db),
-    _user: str | None = Depends(require_auth),
+    label: Annotated[str | None, Form()] = None,
+    notes: Annotated[str | None, Form()] = None,
+    session: DbSession = None,  # type: ignore[assignment]
+    _user: AuthUser = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Update the operator label and notes for a device.
 
@@ -436,7 +443,7 @@ def update_device_notes(
     """
     device = session.query(Device).filter_by(mac_address=mac_address).first()
     if device is None:
-        raise HTTPException(status_code=404, detail="Device not found")
+        raise HTTPException(status_code=404, detail=_DEVICE_NOT_FOUND)
     if label is not None:
         device.label = label[:255] if label else None
     if notes is not None:
@@ -454,9 +461,9 @@ _MAX_PHOTO_BYTES = 10 * 1024 * 1024  # 10 MB
 async def upload_device_photo(
     request: Request,
     mac_address: str,
-    photo: UploadFile = File(...),
-    session: Session = Depends(get_db),
-    _user: str | None = Depends(require_auth),
+    photo: Annotated[UploadFile, File()],
+    session: DbSession = None,  # type: ignore[assignment]
+    _user: AuthUser = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Upload an optional photo for a device.
 
@@ -474,7 +481,7 @@ async def upload_device_photo(
     """
     device = session.query(Device).filter_by(mac_address=mac_address).first()
     if device is None:
-        raise HTTPException(status_code=404, detail="Device not found")
+        raise HTTPException(status_code=404, detail=_DEVICE_NOT_FOUND)
 
     original_name = photo.filename or ""
     suffix = Path(original_name).suffix.lower()
@@ -518,8 +525,8 @@ async def upload_device_photo(
 @limiter.limit("60/minute")
 def get_summary(
     request: Request,
-    session: Session = Depends(get_db),
-    _user: str | None = Depends(require_auth),
+    session: DbSession = None,  # type: ignore[assignment]
+    _user: AuthUser = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Get an overview of the device database.
 
@@ -560,7 +567,7 @@ def get_summary(
 # Dashboard (HTMX)
 # ---------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, session: Session = Depends(get_db)) -> HTMLResponse:
+def dashboard(request: Request, session: DbSession = None) -> HTMLResponse:  # type: ignore[assignment]
     """Render the HTMX-powered dashboard.
 
     Args:
@@ -597,8 +604,8 @@ def dashboard(request: Request, session: Session = Depends(get_db)) -> HTMLRespo
 @v1.get("/devices-table", response_class=HTMLResponse)
 def devices_table_fragment(
     request: Request,
-    page: int = Query(1, ge=1),
-    session: Session = Depends(get_db),
+    page: Annotated[int, Query(ge=1)] = 1,
+    session: DbSession = None,  # type: ignore[assignment]
 ) -> HTMLResponse:
     """HTMX fragment: device table rows for live updates.
 
@@ -647,8 +654,8 @@ def devices_table_fragment(
 def device_detail_page(
     request: Request,
     mac_address: str,
-    page: int = Query(1, ge=1),
-    session: Session = Depends(get_db),
+    page: Annotated[int, Query(ge=1)] = 1,
+    session: DbSession = None,  # type: ignore[assignment]
 ) -> HTMLResponse:
     """Render the device detail page showing all visibility windows.
 
@@ -671,7 +678,7 @@ def device_detail_page(
     )
     total_windows = windows_query.count()
     windows = windows_query.offset((page - 1) * page_size).limit(page_size).all()
-    pages = (total_windows + page_size - 1) // page_size if page_size else 1
+    pages = (total_windows + page_size - 1) // page_size
 
     return templates.TemplateResponse(
         request=request,
@@ -691,8 +698,8 @@ def device_detail_page(
 def device_timeline_page(
     request: Request,
     mac_address: str,
-    gap_minutes: int = Query(60, ge=1, le=10080, description="Gap threshold in minutes."),
-    session: Session = Depends(get_db),
+    gap_minutes: Annotated[int, Query(ge=1, le=10080, description="Gap threshold in minutes.")] = 60,
+    session: DbSession = None,  # type: ignore[assignment]
 ) -> HTMLResponse:
     """Render the device timeline page showing visibility gaps and windows visually.
 
@@ -717,6 +724,7 @@ def device_timeline_page(
     )
 
     gap_threshold_seconds = gap_minutes * 60
+
     entries: list[dict[str, Any]] = []
     for i, w in enumerate(windows):
         entries.append({"type": "window", "window": w})
@@ -752,8 +760,8 @@ def device_timeline_page(
 def windows_table_fragment(
     request: Request,
     mac_address: str,
-    page: int = Query(1, ge=1),
-    session: Session = Depends(get_db),
+    page: Annotated[int, Query(ge=1)] = 1,
+    session: DbSession = None,  # type: ignore[assignment]
 ) -> HTMLResponse:
     """HTMX fragment: visibility windows table rows for a device.
 
@@ -772,7 +780,7 @@ def windows_table_fragment(
     )
     total_windows = windows_query.count()
     windows = windows_query.offset((page - 1) * page_size).limit(page_size).all()
-    pages = (total_windows + page_size - 1) // page_size if page_size else 1
+    pages = (total_windows + page_size - 1) // page_size
 
     return templates.TemplateResponse(
         request=request,
@@ -793,8 +801,8 @@ def windows_table_fragment(
 @limiter.limit("5/minute")  # Tight limit to mitigate brute-force attacks
 def login(
     request: Request,
-    username: str = Form(...),
-    password: str = Form(...),
+    username: Annotated[str, Form()],
+    password: Annotated[str, Form()],
 ) -> dict[str, Any]:
     """Obtain a JWT access token (OAuth2 password flow).
 
@@ -871,8 +879,8 @@ _WINDOW_CSV_FIELDS = [
 @limiter.limit("20/minute")
 def export_devices_csv(
     request: Request,
-    session: Session = Depends(get_db),
-    _user: str | None = Depends(require_auth),
+    session: DbSession = None,  # type: ignore[assignment]
+    _user: AuthUser = None,  # type: ignore[assignment]
 ) -> StreamingResponse:
     """Export all devices as CSV.
 
@@ -902,8 +910,8 @@ def export_devices_csv(
 @limiter.limit("20/minute")
 def export_devices_json(
     request: Request,
-    session: Session = Depends(get_db),
-    _user: str | None = Depends(require_auth),
+    session: DbSession = None,  # type: ignore[assignment]
+    _user: AuthUser = None,  # type: ignore[assignment]
 ) -> StreamingResponse:
     """Export all devices as JSON.
 
@@ -929,9 +937,9 @@ def export_devices_json(
 @limiter.limit("20/minute")
 def export_windows_csv(
     request: Request,
-    mac_address: str | None = Query(None, description="Filter by MAC address"),
-    session: Session = Depends(get_db),
-    _user: str | None = Depends(require_auth),
+    mac_address: Annotated[str | None, Query(description="Filter by MAC address")] = None,
+    session: DbSession = None,  # type: ignore[assignment]
+    _user: AuthUser = None,  # type: ignore[assignment]
 ) -> StreamingResponse:
     """Export visibility windows as CSV.
 
@@ -970,14 +978,16 @@ def export_windows_csv(
 def get_device_timeline(
     request: Request,
     mac_address: str,
-    gap_minutes: int = Query(
-        60,
-        ge=1,
-        le=10080,
-        description="Minimum gap (minutes) between windows to be reported as a gap period.",
-    ),
-    session: Session = Depends(get_db),
-    _user: str | None = Depends(require_auth),
+    gap_minutes: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=10080,
+            description="Minimum gap (minutes) between windows to be reported as a gap period.",
+        ),
+    ] = 60,
+    session: DbSession = None,  # type: ignore[assignment]
+    _user: AuthUser = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Return all visibility windows for a device in chronological order.
 
@@ -998,9 +1008,7 @@ def get_device_timeline(
     """
     device = session.query(Device).filter_by(mac_address=mac_address).first()
     if device is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="Device not found")
+        raise HTTPException(status_code=404, detail=_DEVICE_NOT_FOUND)
 
     windows: list[VisibilityWindow] = (
         session.query(VisibilityWindow)
@@ -1009,24 +1017,7 @@ def get_device_timeline(
         .all()
     )
 
-    entries: list[dict[str, Any]] = []
-    gap_threshold_seconds = gap_minutes * 60
-
-    for i, w in enumerate(windows):
-        entries.append({"type": "window", **_serialize_window(w)})
-
-        if i + 1 < len(windows):
-            next_w = windows[i + 1]
-            gap_seconds = (next_w.first_seen - w.last_seen).total_seconds()
-            if gap_seconds >= gap_threshold_seconds:
-                entries.append(
-                    {
-                        "type": "gap",
-                        "gap_start": w.last_seen.isoformat() if w.last_seen else None,
-                        "gap_end": next_w.first_seen.isoformat() if next_w.first_seen else None,
-                        "gap_seconds": int(gap_seconds),
-                    }
-                )
+    entries = _build_timeline_api_entries(windows, gap_minutes * 60)
 
     first_seen = windows[0].first_seen.isoformat() if windows else None
     last_seen = windows[-1].last_seen.isoformat() if windows else None
@@ -1050,8 +1041,8 @@ def get_device_timeline(
 def get_merge_candidates(
     request: Request,
     mac_address: str,
-    session: Session = Depends(get_db),
-    _user: str | None = Depends(require_auth),
+    session: DbSession = None,  # type: ignore[assignment]
+    _user: AuthUser = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Find canonical devices that *mac_address* (a randomized MAC) may belong to.
 
@@ -1071,9 +1062,7 @@ def get_merge_candidates(
 
     device = session.query(Device).filter_by(mac_address=mac_address).first()
     if device is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="Device not found")
+        raise HTTPException(status_code=404, detail=_DEVICE_NOT_FOUND)
 
     randomized = is_randomized_mac(mac_address)
     raw: list[MergeCandidate] = find_merge_candidates(session, device) if randomized else []
@@ -1135,3 +1124,33 @@ def _serialize_window(window: VisibilityWindow) -> dict[str, Any]:
         "max_signal_dbm": window.max_signal_dbm,
         "scan_count": window.scan_count,
     }
+
+
+def _build_timeline_api_entries(
+    windows: list[VisibilityWindow], gap_threshold_seconds: int
+) -> list[dict[str, Any]]:
+    """Build window and gap entries for the timeline API response.
+
+    Args:
+        windows: Ordered list of visibility windows.
+        gap_threshold_seconds: Minimum gap duration to report as a gap entry.
+
+    Returns:
+        List of dicts with ``type`` of ``"window"`` or ``"gap"``.
+    """
+    entries: list[dict[str, Any]] = []
+    for i, w in enumerate(windows):
+        entries.append({"type": "window", **_serialize_window(w)})
+        if i + 1 < len(windows):
+            next_w = windows[i + 1]
+            gap_seconds = (next_w.first_seen - w.last_seen).total_seconds()
+            if gap_seconds >= gap_threshold_seconds:
+                entries.append(
+                    {
+                        "type": "gap",
+                        "gap_start": w.last_seen.isoformat() if w.last_seen else None,
+                        "gap_end": next_w.first_seen.isoformat() if next_w.first_seen else None,
+                        "gap_seconds": int(gap_seconds),
+                    }
+                )
+    return entries

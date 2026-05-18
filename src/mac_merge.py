@@ -75,6 +75,57 @@ class MergeCandidate:
     """Human-readable reasons for the match."""
 
 
+def _collect_reasons(device: Device, anchor: Device) -> list[str]:
+    """Return a list of human-readable reasons why *device* might match *anchor*."""
+    reasons: list[str] = []
+    if (
+        device.device_name
+        and anchor.device_name
+        and device.device_name.strip().lower() == anchor.device_name.strip().lower()
+    ):
+        reasons.append(f"device_name='{device.device_name}'")
+    if device.vendor and anchor.vendor and device.vendor.strip().lower() == anchor.vendor.strip().lower():
+        reasons.append(f"vendor='{device.vendor}'")
+    if device.hostname and anchor.hostname and device.hostname.strip().lower() == anchor.hostname.strip().lower():
+        reasons.append(f"hostname='{device.hostname}'")
+    if device.ip_address and anchor.ip_address and device.ip_address.strip() == anchor.ip_address.strip():
+        reasons.append(f"ip_address='{device.ip_address}'")
+    return reasons
+
+
+def _determine_confidence(
+    device: Device,
+    anchor: Device,
+    session: Session,
+    reasons: list[str],
+) -> str:
+    """Determine the confidence level for a merge candidate."""
+    name_match = any(r.startswith("device_name=") for r in reasons)
+    vendor_match = any(r.startswith("vendor=") for r in reasons)
+    if name_match and vendor_match:
+        if _has_temporal_overlap(session, device.mac_address, anchor.mac_address):
+            reasons.append("WARNING: temporal overlap detected — may be two distinct devices")
+            return "low"
+        return "high"
+    if name_match:
+        return "medium"
+    return "low"
+
+
+def _evaluate_anchor(device: Device, anchor: Device, session: Session) -> MergeCandidate | None:
+    """Score *anchor* as a merge target for *device*; return None if no match."""
+    reasons = _collect_reasons(device, anchor)
+    if not reasons:
+        return None
+    confidence = _determine_confidence(device, anchor, session, reasons)
+    return MergeCandidate(
+        source_mac=device.mac_address,
+        target_mac=anchor.mac_address,
+        confidence=confidence,
+        reasons=reasons,
+    )
+
+
 def find_merge_candidates(
     session: Session,
     device: Device,
@@ -118,57 +169,9 @@ def find_merge_candidates(
     anchors = [a for a in anchors if not is_randomized_mac(a.mac_address)]
 
     for anchor in anchors:
-        reasons: list[str] = []
-
-        # Match signals
-        name_match = (
-            device.device_name
-            and anchor.device_name
-            and device.device_name.strip().lower() == anchor.device_name.strip().lower()
-        )
-        vendor_match = (
-            device.vendor and anchor.vendor and device.vendor.strip().lower() == anchor.vendor.strip().lower()
-        )
-        hostname_match = (
-            device.hostname and anchor.hostname and device.hostname.strip().lower() == anchor.hostname.strip().lower()
-        )
-        ip_match = device.ip_address and anchor.ip_address and device.ip_address.strip() == anchor.ip_address.strip()
-
-        if name_match:
-            reasons.append(f"device_name='{device.device_name}'")
-        if vendor_match:
-            reasons.append(f"vendor='{device.vendor}'")
-        if hostname_match:
-            reasons.append(f"hostname='{device.hostname}'")
-        if ip_match:
-            reasons.append(f"ip_address='{device.ip_address}'")
-
-        if not reasons:
-            continue
-
-        # Determine confidence
-        if name_match and vendor_match:
-            # Check for temporal overlap (would indicate two different devices)
-            if _has_temporal_overlap(session, device.mac_address, anchor.mac_address):
-                # Same name+vendor but active simultaneously — likely two devices.
-                # Downgrade to low to avoid false positives.
-                confidence = "low"
-                reasons.append("WARNING: temporal overlap detected — may be two distinct devices")
-            else:
-                confidence = "high"
-        elif name_match:
-            confidence = "medium"
-        else:
-            confidence = "low"
-
-        candidates.append(
-            MergeCandidate(
-                source_mac=device.mac_address,
-                target_mac=anchor.mac_address,
-                confidence=confidence,
-                reasons=reasons,
-            )
-        )
+        candidate = _evaluate_anchor(device, anchor, session)
+        if candidate is not None:
+            candidates.append(candidate)
 
     # Best first: high > medium > low, then by number of matching signals
     _confidence_order = {"high": 0, "medium": 1, "low": 2}

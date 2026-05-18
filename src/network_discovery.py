@@ -265,6 +265,30 @@ def _ping_host(ip: str, timeout: float = 1.0) -> str | None:
     return None
 
 
+def _run_concurrent_pings(targets: list[str], max_workers: int, timeout: float) -> list[str]:
+    """Ping all *targets* concurrently and return the IPs that responded."""
+    alive: list[str] = []
+    checked = 0
+    last_progress_log = time.monotonic()
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_ping_host, ip, timeout): ip for ip in targets}
+        for future in as_completed(futures):
+            result = future.result()
+            checked += 1
+            if result:
+                alive.append(result)
+            now = time.monotonic()
+            if checked == len(targets) or now - last_progress_log >= 30:
+                logger.info(
+                    "Ping sweep progress: %d/%d host(s) checked, %d responded.",
+                    checked,
+                    len(targets),
+                    len(alive),
+                )
+                last_progress_log = now
+    return alive
+
+
 def ping_sweep(
     subnets: list[str],
     max_workers: int = 40,
@@ -307,27 +331,7 @@ def ping_sweep(
         return []
 
     logger.info("Ping sweep: %d hosts across %d subnet(s)...", len(targets), len(subnets))
-
-    alive: list[str] = []
-    checked = 0
-    last_progress_log = time.monotonic()
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_ping_host, ip, timeout): ip for ip in targets}
-        for future in as_completed(futures):
-            result = future.result()
-            checked += 1
-            if result:
-                alive.append(result)
-            now = time.monotonic()
-            if checked == len(targets) or now - last_progress_log >= 30:
-                logger.info(
-                    "Ping sweep progress: %d/%d host(s) checked, %d responded.",
-                    checked,
-                    len(targets),
-                    len(alive),
-                )
-                last_progress_log = now
-
+    alive = _run_concurrent_pings(targets, max_workers, timeout)
     logger.info("Ping sweep complete: %d hosts responded.", len(alive))
 
     devices: list[NetworkDevice] = []
@@ -335,11 +339,8 @@ def ping_sweep(
         mac = _ip_to_pseudo_mac(ip)
         hostname = _resolve_hostname(ip)
         vendor = lookup_vendor(mac)
-        # Determine the network segment label for this device
         source_cidr = ip_to_cidr.get(ip)
-        segment: str | None = None
-        if source_cidr:
-            segment = _subnet_labels.get(source_cidr, source_cidr)
+        segment: str | None = _subnet_labels.get(source_cidr, source_cidr) if source_cidr else None
         devices.append(
             NetworkDevice(
                 ip_address=ip,
@@ -433,6 +434,31 @@ def _parse_linux_routing_table() -> list[str]:
     return discovered
 
 
+def _process_windows_route_line(
+    stripped: str, ipv4_section: bool, subnets: set[str]
+) -> bool:
+    """Process one stripped line from ``route print``; returns updated *ipv4_section* flag."""
+    if "IPv4 Route Table" in stripped or "Active Routes" in stripped:
+        return True
+    if not ipv4_section:
+        return False
+    if not stripped or stripped.startswith(("Network", "=", "Default")):
+        return ipv4_section
+    parts = stripped.split()
+    if len(parts) < 2:
+        return ipv4_section
+    dest, mask = parts[0], parts[1]
+    if dest in ("0.0.0.0", "127.0.0.0"):
+        return ipv4_section
+    try:
+        net = ipaddress.ip_network(f"{dest}/{mask}", strict=False)
+        if net.prefixlen >= 8:
+            subnets.add(str(net))
+    except ValueError:
+        pass
+    return ipv4_section
+
+
 def _parse_windows_routing_table() -> list[str]:
     """Parse ``route print`` to extract directly-connected subnets (Windows)."""
     try:
@@ -451,36 +477,9 @@ def _parse_windows_routing_table() -> list[str]:
         return []
 
     subnets: set[str] = set()
-    # The IPv4 route table has lines like:
-    #   Network Destination  Netmask  Gateway  Interface  Metric
-    #   192.168.1.0          255.255.255.0   On-link  192.168.1.x  281
     _ipv4_section = False
     for line in result.stdout.splitlines():
-        stripped = line.strip()
-        if "IPv4 Route Table" in stripped or "Active Routes" in stripped:
-            _ipv4_section = True
-            continue
-        if _ipv4_section and stripped.startswith("=") and stripped.count("=") > 10:
-            # Separator line between sections
-            continue
-        if not _ipv4_section:
-            continue
-        # Skip header / empty lines
-        if not stripped or stripped.startswith("Network") or stripped.startswith("="):
-            continue
-        parts = stripped.split()
-        if len(parts) < 2:
-            continue
-        dest, mask = parts[0], parts[1]
-        # Skip default and loopback
-        if dest in ("0.0.0.0", "127.0.0.0"):
-            continue
-        try:
-            net = ipaddress.ip_network(f"{dest}/{mask}", strict=False)
-            if net.prefixlen >= 8:
-                subnets.add(str(net))
-        except ValueError:
-            pass
+        _ipv4_section = _process_windows_route_line(line.strip(), _ipv4_section, subnets)
 
     discovered = sorted(subnets)
     logger.info("Routing table: discovered %d subnet(s): %s", len(discovered), discovered)

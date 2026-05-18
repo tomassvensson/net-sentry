@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TypeVar
 
 from sqlalchemy import Engine, func
@@ -242,41 +242,53 @@ def run_scan(config: AppConfig | None = None, rescan_ports: bool = False) -> Non
         mqtt_pub.connect()
 
     if config.scan.continuous:
-        logger.info(
-            "Continuous mode enabled. Scan interval: %ds. Press Ctrl+C to stop.",
-            config.scan.interval_seconds,
-        )
-        signal.signal(signal.SIGINT, _handle_shutdown)
-        signal.signal(signal.SIGTERM, _handle_shutdown)
-
-        scan_number = 0
-        while not _shutdown_requested:
-            scan_number += 1
-            logger.info("--- Scan cycle #%d ---", scan_number)
-            _run_single_scan(engine, config, whitelist, alert_mgr, mqtt_pub, rescan_ports=rescan_ports)
-            # After the first cycle, only rescan ports if explicitly requested
-            rescan_ports = False
-
-            if _shutdown_requested:
-                break
-
-            logger.info(
-                "Next scan in %d seconds...",
-                config.scan.interval_seconds,
-            )
-            # Sleep in small increments to allow interruption
-            for _ in range(config.scan.interval_seconds * 10):
-                if _shutdown_requested:
-                    break
-                time.sleep(0.1)
-
-        logger.info("Continuous scanning stopped after %d cycles.", scan_number)
+        _run_continuous_scan(engine, config, whitelist, alert_mgr, mqtt_pub, rescan_ports=rescan_ports)
     else:
         _run_single_scan(engine, config, whitelist, alert_mgr, mqtt_pub, rescan_ports=rescan_ports)
 
     # Cleanup MQTT
     if mqtt_pub is not None:
         mqtt_pub.disconnect()
+
+
+def _run_continuous_scan(
+    engine: Engine,
+    config: AppConfig,
+    whitelist: WhitelistManager,
+    alert_mgr: AlertManager,
+    mqtt_publisher: object | None,
+    rescan_ports: bool = False,
+) -> None:
+    """Run scan cycles repeatedly until shutdown is requested."""
+    logger.info(
+        "Continuous mode enabled. Scan interval: %ds. Press Ctrl+C to stop.",
+        config.scan.interval_seconds,
+    )
+    signal.signal(signal.SIGINT, _handle_shutdown)
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+
+    scan_number = 0
+    while not _shutdown_requested:
+        scan_number += 1
+        logger.info("--- Scan cycle #%d ---", scan_number)
+        _run_single_scan(engine, config, whitelist, alert_mgr, mqtt_publisher, rescan_ports=rescan_ports)
+        rescan_ports = False  # Only force-rescan ports on the first cycle
+
+        if _shutdown_requested:
+            break
+
+        logger.info("Next scan in %d seconds...", config.scan.interval_seconds)
+        _interruptible_sleep(config.scan.interval_seconds)
+
+    logger.info("Continuous scanning stopped after %d cycles.", scan_number)
+
+
+def _interruptible_sleep(seconds: int) -> None:
+    """Sleep in 0.1 s increments so shutdown signals are honoured promptly."""
+    for _ in range(seconds * 10):
+        if _shutdown_requested:
+            break
+        time.sleep(0.1)
 
 
 def _run_single_scan(
@@ -415,6 +427,62 @@ class _PortScanResult:
     elapsed_seconds: float
 
 
+def _build_scanner_tasks(
+    config: AppConfig,
+    ping_sweep_subnets: list[str],
+) -> dict[str, Callable[[], list]]:
+    """Build the set of enabled scanner tasks to run in parallel."""
+    tasks: dict[str, Callable[[], list]] = {}
+
+    if config.scan.wifi_enabled:
+        tasks["WiFi"] = scan_wifi_networks
+    if config.scan.bluetooth_enabled:
+        tasks["Bluetooth"] = scan_bluetooth_devices
+    if config.scan.ble_enabled and platform.system().lower() == "linux":
+        tasks["BLE"] = lambda: scan_ble_devices(scanning_mode=config.scan.ble_scanning_mode)
+    if config.scan.arp_enabled:
+        tasks["ARP"] = scan_arp_table
+    if ping_sweep_subnets:
+        tasks["Ping Sweep"] = lambda: ping_sweep(
+            ping_sweep_subnets,
+            max_workers=config.ping_sweep.max_workers,
+            timeout=config.ping_sweep.timeout_seconds,
+            subnet_labels=config.ping_sweep.subnet_labels or None,
+        )
+    if config.scan.mdns_enabled:
+        allowed = config.mdns.service_types or None
+        tasks["mDNS"] = lambda: _import_and_scan_mdns(allowed_types=allowed)
+    if config.scan.ssdp_enabled:
+        tasks["SSDP"] = _import_and_scan_ssdp
+    if config.scan.ipv6_enabled:
+        tasks["IPv6"] = scan_ipv6_neighbors
+    if config.scan.monitor_mode_enabled:
+        tasks["Monitor"] = _import_and_scan_monitor
+    if config.scan.dhcp_enabled:
+        tasks["DHCP"] = lambda: _import_and_scan_dhcp(config.scan.dhcp_lease_file)
+    return tasks
+
+
+def _dispatch_scanner_result(name: str, result: list, data: "_ScanData") -> None:
+    """Populate *data* with the result returned by a named scanner."""
+    if name == "WiFi":
+        data.wifi_networks = result
+    elif name in ("Bluetooth", "BLE"):
+        data.bt_devices = _merge_bluetooth_devices(data.bt_devices, result)
+    elif name == "ARP":
+        data.arp_devices = result
+    elif name == "Ping Sweep":
+        data.ping_sweep_devices = result
+    elif name == "mDNS":
+        data.mdns_devices = result
+    elif name == "SSDP":
+        data.ssdp_devices = result
+    elif name == "IPv6":
+        data.ipv6_neighbors = result
+    elif name == "Monitor":
+        data.monitor_devices = result
+
+
 def _execute_all_scanners(config: AppConfig, force_host_discovery: bool = False) -> _ScanData:
     """Run all enabled scanners and return collected data.
 
@@ -432,78 +500,26 @@ def _execute_all_scanners(config: AppConfig, force_host_discovery: bool = False)
     """
     data = _ScanData()
 
-    # Build the set of independent scanner tasks
-    tasks: dict[str, Callable[[], list]] = {}
-
-    if config.scan.wifi_enabled:
-        tasks["WiFi"] = scan_wifi_networks
-
-    if config.scan.bluetooth_enabled:
-        tasks["Bluetooth"] = scan_bluetooth_devices
-
-    if config.scan.ble_enabled and platform.system().lower() == "linux":
-        tasks["BLE"] = lambda: scan_ble_devices(scanning_mode=config.scan.ble_scanning_mode)
-
-    if config.scan.arp_enabled:
-        tasks["ARP"] = scan_arp_table
-
-    ping_sweep_subnets = list(config.ping_sweep.subnets)
+    ping_sweep_subnets: list[str] = []
+    if config.ping_sweep.enabled:
+        ping_sweep_subnets = list(config.ping_sweep.subnets)
     if force_host_discovery and not ping_sweep_subnets:
         ping_sweep_subnets = _subnets_safe_for_forced_host_discovery(
             discover_subnets_from_routing_table(),
         )
 
-    if (config.ping_sweep.enabled or force_host_discovery) and ping_sweep_subnets:
-        tasks["Ping Sweep"] = lambda: ping_sweep(
-            ping_sweep_subnets,
-            max_workers=config.ping_sweep.max_workers,
-            timeout=config.ping_sweep.timeout_seconds,
-            subnet_labels=config.ping_sweep.subnet_labels or None,
-        )
-
-    if config.scan.mdns_enabled:
-        allowed = config.mdns.service_types or None
-        tasks["mDNS"] = lambda: _import_and_scan_mdns(allowed_types=allowed)
-
-    if config.scan.ssdp_enabled:
-        tasks["SSDP"] = _import_and_scan_ssdp
-
-    if config.scan.ipv6_enabled:
-        tasks["IPv6"] = scan_ipv6_neighbors
-
-    if config.scan.monitor_mode_enabled:
-        tasks["Monitor"] = _import_and_scan_monitor
-
-    if config.scan.dhcp_enabled:
-        tasks["DHCP"] = lambda: _import_and_scan_dhcp(config.scan.dhcp_lease_file)
-
+    tasks = _build_scanner_tasks(config, ping_sweep_subnets)
     logger.info("Scanner phase started: %s.", ", ".join(tasks) if tasks else "no scanners enabled")
 
-    # Run all independent scanners in parallel
     with ThreadPoolExecutor(max_workers=len(tasks) or 1, thread_name_prefix="scanner") as executor:
         future_to_name = {
             executor.submit(_run_scanner_with_trace_context, name, fn): name for name, fn in tasks.items()
         }
         for future in as_completed(future_to_name):
             name = future_to_name[future]
-            result = future.result()  # _run_scanner already handles exceptions
+            result = future.result()
             logger.info("%s scanner finished: %d result(s).", name, len(result))
-            if name == "WiFi":
-                data.wifi_networks = result
-            elif name in ("Bluetooth", "BLE"):
-                data.bt_devices = _merge_bluetooth_devices(data.bt_devices, result)
-            elif name == "ARP":
-                data.arp_devices = result
-            elif name == "Ping Sweep":
-                data.ping_sweep_devices = result
-            elif name == "mDNS":
-                data.mdns_devices = result
-            elif name == "SSDP":
-                data.ssdp_devices = result
-            elif name == "IPv6":
-                data.ipv6_neighbors = result
-            elif name == "Monitor":
-                data.monitor_devices = result
+            _dispatch_scanner_result(name, result, data)
 
     # A sweep populates the OS ARP cache; refresh it afterwards so LAN hosts
     # are stored and port-scanned under their real MAC instead of pseudo-MACs.
@@ -628,8 +644,8 @@ def _run_scanner(name: str, scanner_fn: Callable[[], list[_T]]) -> list[_T]:
     try:
         results = scanner_fn()
         return results
-    except Exception as exc:
-        logger.error("%s scan failed: %s", name, exc)
+    except Exception:
+        logger.exception("%s scan failed", name)
         try:
             from src.metrics import SCAN_ERRORS
 
@@ -726,8 +742,8 @@ def _resolve_netbios(arp_devices: list[NetworkDevice]) -> dict[str, str]:
         ips = [d.ip_address for d in arp_devices]
         nb_infos = resolve_netbios_names(ips)
         return {nb.ip_address: nb.netbios_name for nb in nb_infos}
-    except Exception as exc:
-        logger.error("NetBIOS resolution failed: %s", exc)
+    except Exception:
+        logger.exception("NetBIOS resolution failed")
         return {}
 
 
@@ -741,8 +757,8 @@ def _store_scan_results(
     ha_lookup: dict[str, HaDevice] | None = None,
     rescan_ports: bool = False,
 ) -> tuple[
-    list[tuple[Device, VisibilityWindow]],
-    list[tuple[Device, VisibilityWindow]],
+    list[tuple[Device, VisibilityWindow, datetime | None]],
+    list[tuple[Device, VisibilityWindow, datetime | None]],
 ]:
     """Store all scan results in the database.
 
@@ -766,46 +782,11 @@ def _store_scan_results(
     logger.info("Tracked %d Bluetooth devices.", len(bt_results))
 
     all_network_devices = data.arp_devices + data.ping_sweep_devices
-    port_summary = _PortScanSummary()
-    port_targets: list[_PortScanTarget] = []
-    if config is not None and config.port_scan.enabled:
-        mode = "full" if config.port_scan.ports == _FULL_TCP_PORTS else "configured"
-        logger.info(
-            "Port scan phase started: %d network device(s), %d TCP port(s) per device, mode=%s, host_workers=%d.",
-            sum(1 for device in all_network_devices if device.ip_address),
-            len(config.port_scan.ports),
-            mode,
-            config.port_scan.host_workers,
-        )
-    for arp_dev in all_network_devices:
-        device = _upsert_network_device(
-            session,
-            arp_dev,
-            whitelist,
-            alert_mgr,
-            data.netbios_names,
-            gap,
-            config=config,
-            ha_lookup=ha_lookup or {},
-            rescan_ports=rescan_ports,
-        )
-        if config is not None and config.port_scan.enabled:
-            if not arp_dev.ip_address:
-                port_summary.skipped_hosts += 1
-            elif not rescan_ports and device.open_ports:
-                port_summary.cached_hosts += 1
-            else:
-                port_targets.append(_PortScanTarget(mac_address=device.mac_address, ip_address=arp_dev.ip_address))
-    if config is not None and config.port_scan.enabled and port_targets:
-        session.flush()
-        scan_results = _scan_port_targets_parallel(port_targets, config)
-        for scan_result in scan_results:
-            port_device = session.query(Device).filter_by(mac_address=scan_result.mac_address).first()
-            if port_device is None:
-                continue
-            port_device.open_ports = encode_open_ports(scan_result.open_ports) if scan_result.open_ports else ""
-            port_summary.scanned_hosts += 1
-            port_summary.total_open_ports += len(scan_result.open_ports)
+    port_targets, port_summary = _process_network_devices(
+        session, all_network_devices, whitelist, alert_mgr, data, gap, config, ha_lookup, rescan_ports
+    )
+    if port_targets:
+        _run_port_scan_phase(session, config, port_targets, port_summary)
     if config is not None and config.port_scan.enabled:
         logger.info(
             "Port scan phase finished: scanned %d host(s), reused cached results for %d, "
@@ -828,20 +809,100 @@ def _store_scan_results(
     return wifi_results, bt_results
 
 
+def _process_network_devices(
+    session: DbSession,
+    network_devices: list,
+    whitelist: WhitelistManager,
+    alert_mgr: AlertManager,
+    data: "_ScanData",
+    gap: int,
+    config: AppConfig | None,
+    ha_lookup: dict | None,
+    rescan_ports: bool,
+) -> tuple[list["_PortScanTarget"], "_PortScanSummary"]:
+    """Upsert each network device and collect port scan targets."""
+    port_summary = _PortScanSummary()
+    port_targets: list[_PortScanTarget] = []
+    port_scan_enabled = config is not None and config.port_scan.enabled
+    if port_scan_enabled:
+        mode = "full" if config.port_scan.ports == _FULL_TCP_PORTS else "configured"  # type: ignore[union-attr]
+        logger.info(
+            "Port scan phase started: %d network device(s), %d TCP port(s) per device, mode=%s, host_workers=%d.",
+            sum(1 for d in network_devices if d.ip_address),
+            len(config.port_scan.ports),  # type: ignore[union-attr]
+            mode,
+            config.port_scan.host_workers,  # type: ignore[union-attr]
+        )
+    for arp_dev in network_devices:
+        device = _upsert_network_device(
+            session,
+            arp_dev,
+            whitelist,
+            alert_mgr,
+            data.netbios_names,
+            gap,
+            config=config,
+            ha_lookup=ha_lookup or {},
+            rescan_ports=rescan_ports,
+        )
+        if port_scan_enabled:
+            _classify_port_scan_target(arp_dev, device, rescan_ports, port_targets, port_summary)
+    return port_targets, port_summary
+
+
+def _classify_port_scan_target(
+    arp_dev: object,
+    device: Device,
+    rescan_ports: bool,
+    port_targets: list["_PortScanTarget"],
+    port_summary: "_PortScanSummary",
+) -> None:
+    """Classify a network device as a port-scan target, cached, or skipped."""
+    if not arp_dev.ip_address:  # type: ignore[union-attr]
+        port_summary.skipped_hosts += 1
+    elif not rescan_ports and device.open_ports:
+        port_summary.cached_hosts += 1
+    else:
+        port_targets.append(_PortScanTarget(mac_address=device.mac_address, ip_address=arp_dev.ip_address))  # type: ignore[union-attr]
+
+
+def _run_port_scan_phase(
+    session: DbSession,
+    config: AppConfig | None,
+    port_targets: list["_PortScanTarget"],
+    port_summary: "_PortScanSummary",
+) -> None:
+    """Run port scans for all collected targets and persist results."""
+    if config is None or not config.port_scan.enabled:
+        return
+    session.flush()
+    scan_results = _scan_port_targets_parallel(port_targets, config)
+    for scan_result in scan_results:
+        port_device = session.query(Device).filter_by(mac_address=scan_result.mac_address).first()
+        if port_device is None:
+            continue
+        port_device.open_ports = encode_open_ports(scan_result.open_ports) if scan_result.open_ports else ""
+        port_summary.scanned_hosts += 1
+        port_summary.total_open_ports += len(scan_result.open_ports)
+
+
 def _alert_new_tracked_devices(
-    tracked_results: list[tuple[Device, VisibilityWindow]],
+    tracked_results: list[tuple[Device, VisibilityWindow, datetime | None]],
     whitelist: WhitelistManager,
     alert_mgr: AlertManager,
 ) -> None:
-    """Send alerts for newly discovered tracked devices.
+    """Send alerts for newly discovered tracked devices and returning devices.
 
     Args:
-        tracked_results: List of (device, window) tuples from tracking.
+        tracked_results: List of (device, window, previous_last_seen) tuples from tracking.
         whitelist: Whitelist manager.
         alert_mgr: Alert manager.
     """
-    for device, _window in tracked_results:
-        if device.created_at == device.updated_at:
+    warn_after_days = alert_mgr._config.warn_returning_after_days
+    now = datetime.now(timezone.utc)
+    for device, _window, previous_last_seen in tracked_results:
+        is_new_device = device.created_at == device.updated_at
+        if is_new_device:
             alert_mgr.on_new_device(
                 mac_address=device.mac_address,
                 device_type=device.device_type,
@@ -849,6 +910,19 @@ def _alert_new_tracked_devices(
                 device_name=device.device_name,
                 is_whitelisted=whitelist.is_known(device.mac_address),
             )
+        elif previous_last_seen is not None and warn_after_days > 0:
+            # Device already known — check if it was absent for more than warn_after_days
+            last_seen_aware = previous_last_seen
+            if last_seen_aware.tzinfo is None:
+                last_seen_aware = last_seen_aware.replace(tzinfo=timezone.utc)
+            days_absent = (now - last_seen_aware).total_seconds() / 86400.0
+            if days_absent >= warn_after_days:
+                alert_mgr.on_returning_device(
+                    mac_address=device.mac_address,
+                    device_type=device.device_type,
+                    days_absent=days_absent,
+                    is_whitelisted=whitelist.is_known(device.mac_address),
+                )
 
 
 def _upsert_network_device(
@@ -861,7 +935,6 @@ def _upsert_network_device(
     config: AppConfig | None = None,
     ha_lookup: dict[str, HaDevice] | None = None,
     rescan_ports: bool = False,
-    port_summary: _PortScanSummary | None = None,
 ) -> Device:
     """Insert/update a network device from ARP scan.
 
@@ -875,7 +948,6 @@ def _upsert_network_device(
         config: Application config (for port scan settings).
         ha_lookup: Pre-fetched Home Assistant entity lookup.
         rescan_ports: Force port re-scan even if cached data exists.
-        port_summary: Deprecated; ignored.
 
     Returns:
         The inserted or updated Device row.

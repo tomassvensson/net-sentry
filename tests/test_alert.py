@@ -285,3 +285,82 @@ class TestAlertRules:
         mgr.check_disappearance(last_seen_by_mac)
         mgr.check_disappearance(last_seen_by_mac)  # second call — still within cooldown
         assert mgr.alert_count == 1
+
+
+class TestWebhookDispatcher:
+    """Tests for WebhookDispatcher."""
+
+    @pytest.mark.timeout(30)
+    def test_dispatch_blocked_for_non_http_scheme(self) -> None:
+        """dispatch() should skip sending when the URL uses a disallowed scheme."""
+        from unittest.mock import patch
+
+        from src.alert import WebhookDispatcher
+
+        dispatcher = WebhookDispatcher("file:///etc/passwd")
+        with patch("urllib.request.urlopen") as mock_open:
+            dispatcher.dispatch("test message")
+        mock_open.assert_not_called()
+
+    @pytest.mark.timeout(30)
+    def test_dispatch_sends_for_https_url(self) -> None:
+        """dispatch() should attempt to POST for a valid https URL."""
+        from unittest.mock import MagicMock, patch
+
+        from src.alert import WebhookDispatcher
+
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        dispatcher = WebhookDispatcher("https://hooks.example.com/test")
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            dispatcher.dispatch("hello", mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi")
+
+        # If no exception, the request was attempted
+
+
+class TestOnReturningDevice:
+    """Tests for AlertManager.on_returning_device."""
+
+    @pytest.mark.timeout(30)
+    def test_returning_device_increments_count(self) -> None:
+        config = AlertConfig(enabled=True, warn_returning_after_days=14)
+        mgr = AlertManager(config)
+        mgr.on_returning_device(
+            mac_address="AA:BB:CC:DD:EE:FF",
+            device_type="wifi_ap",
+            days_absent=20.0,
+        )
+        assert mgr.alert_count == 1
+
+    @pytest.mark.timeout(30)
+    def test_returning_device_suppressed_when_disabled(self) -> None:
+        config = AlertConfig(enabled=False, warn_returning_after_days=14)
+        mgr = AlertManager(config)
+        mgr.on_returning_device(
+            mac_address="AA:BB:CC:DD:EE:FF",
+            device_type="wifi_ap",
+            days_absent=20.0,
+        )
+        assert mgr.alert_count == 0
+
+    @pytest.mark.timeout(30)
+    def test_returning_device_suppressed_when_threshold_zero(self) -> None:
+        config = AlertConfig(enabled=True, warn_returning_after_days=0)
+        mgr = AlertManager(config)
+        mgr.on_returning_device(
+            mac_address="AA:BB:CC:DD:EE:FF",
+            device_type="wifi_ap",
+            days_absent=20.0,
+        )
+        assert mgr.alert_count == 0
+
+    @pytest.mark.timeout(30)
+    def test_returning_device_cooldown(self) -> None:
+        config = AlertConfig(enabled=True, warn_returning_after_days=14, cooldown_seconds=300)
+        mgr = AlertManager(config)
+        mgr.on_returning_device("AA:BB:CC:DD:EE:FF", "wifi_ap", 20.0)
+        mgr.on_returning_device("AA:BB:CC:DD:EE:FF", "wifi_ap", 20.0)
+        assert mgr.alert_count == 1

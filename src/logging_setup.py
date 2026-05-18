@@ -33,9 +33,8 @@ def setup_logging(
     root = logging.getLogger()
     root.setLevel(level)
 
-    # Remove any handlers added during import of other modules so we start
-    # from a clean slate.
-    for handler in list(root.handlers):
+    # Remove all existing handlers so we start from a clean slate.
+    for handler in root.handlers[:]:
         root.removeHandler(handler)
 
     handler = logging.StreamHandler(sys.stdout)

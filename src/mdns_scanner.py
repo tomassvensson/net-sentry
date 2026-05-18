@@ -76,6 +76,43 @@ class MdnsDevice:
     scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+def _discover_dynamic_service_types(sock: socket.socket, timeout: float) -> list[str]:
+    """Query DNS-SD to discover service types not in the built-in list."""
+    dynamic: list[str] = []
+    enum_responses = _query_service_type(sock, _DNS_SD_SERVICES, timeout)
+    for raw in enum_responses:
+        for r in _parse_dns_records(raw):
+            if r["type"] == _DNS_TYPE_PTR and "target" in r:
+                svc = r["target"]
+                if svc not in _SERVICE_TYPES and svc not in dynamic:
+                    dynamic.append(svc)
+                    logger.debug("DNS-SD discovered service type: %s", svc)
+    return dynamic
+
+
+def _query_all_service_types(
+    sock: socket.socket,
+    all_service_types: list[str],
+    timeout: float,
+) -> tuple[list[dict], list[str]]:
+    """Query every service type and collect all DNS records and PTR targets."""
+    all_records: list[dict] = []
+    ptr_targets: list[str] = []
+    last_progress_log = time.monotonic()
+    for index, stype in enumerate(all_service_types, start=1):
+        now = time.monotonic()
+        if index == 1 or index == len(all_service_types) or now - last_progress_log >= 30:
+            logger.info("mDNS progress: querying service type %d/%d (%s).", index, len(all_service_types), stype)
+            last_progress_log = now
+        for raw in _query_service_type(sock, stype, timeout):
+            records = _parse_dns_records(raw)
+            all_records.extend(records)
+            for r in records:
+                if r["type"] == _DNS_TYPE_PTR and "target" in r:
+                    ptr_targets.append(r["target"])
+    return all_records, ptr_targets
+
+
 def scan_mdns_services(timeout: float = _BROWSE_TIMEOUT, allowed_types: list[str] | None = None) -> list[MdnsDevice]:
     """Discover devices advertising mDNS services on the local network.
 
@@ -98,47 +135,17 @@ def scan_mdns_services(timeout: float = _BROWSE_TIMEOUT, allowed_types: list[str
         logger.warning("Cannot start mDNS scanner: failed to create socket")
         return []
 
-    seen_keys: set[str] = set()
-    ptr_targets: list[str] = []
-    all_records: list[dict] = []
-
     try:
-        # Step 1: DNS-SD service enumeration — discover what service types are present
-        dynamic_service_types: list[str] = []
-        enum_responses = _query_service_type(sock, _DNS_SD_SERVICES, timeout)
-        for raw in enum_responses:
-            records = _parse_dns_records(raw)
-            for r in records:
-                if r["type"] == _DNS_TYPE_PTR and "target" in r:
-                    svc = r["target"]
-                    # PTR targets from _services._dns-sd are service-type names
-                    if svc not in _SERVICE_TYPES and svc not in dynamic_service_types:
-                        dynamic_service_types.append(svc)
-                        logger.debug("DNS-SD discovered service type: %s", svc)
-
+        dynamic_service_types = _discover_dynamic_service_types(sock, timeout)
         if dynamic_service_types:
             logger.info("DNS-SD enumeration found %d additional service types", len(dynamic_service_types))
-
-        # Step 2: Query all service types (static + discovered)
         all_service_types = allowed_types or list(_SERVICE_TYPES) + dynamic_service_types
         logger.info("mDNS querying %d service type(s).", len(all_service_types))
-        last_progress_log = time.monotonic()
-        for index, stype in enumerate(all_service_types, start=1):
-            now = time.monotonic()
-            if index == 1 or index == len(all_service_types) or now - last_progress_log >= 30:
-                logger.info("mDNS progress: querying service type %d/%d (%s).", index, len(all_service_types), stype)
-                last_progress_log = now
-            raw_responses = _query_service_type(sock, stype, timeout)
-            for raw in raw_responses:
-                records = _parse_dns_records(raw)
-                all_records.extend(records)
-                for r in records:
-                    if r["type"] == _DNS_TYPE_PTR and "target" in r:
-                        ptr_targets.append(r["target"])
+        all_records, ptr_targets = _query_all_service_types(sock, all_service_types, timeout)
     finally:
         sock.close()
 
-    devices = _build_devices_from_records(all_records, ptr_targets, seen_keys)
+    devices = _build_devices_from_records(all_records, ptr_targets, set())
     logger.info("mDNS discovery complete: found %d services.", len(devices))
     return devices
 
@@ -179,6 +186,37 @@ def _build_ptr_query(service_type: str) -> bytes:
     return header + question
 
 
+def _find_dns_name_end(data: bytes, start: int) -> int:
+    """Return the byte offset immediately after the encoded DNS name at *start*.
+
+    Scans forward without following pointer compression — used only to
+    determine the ``end_offset`` returned by :func:`_decode_dns_name`.
+    """
+    offset = start
+    while offset < len(data):
+        length = data[offset]
+        if length == 0:
+            return offset + 1
+        if (length & 0xC0) == 0xC0:
+            return offset + 2
+        offset += length + 1
+    return offset
+
+
+def _follow_dns_pointer(data: bytes, offset: int, visited: set[int]) -> int | None:
+    """Follow a DNS compression pointer at *offset*.
+
+    Returns the target offset, or ``None`` if the pointer is invalid or cyclic.
+    """
+    if offset + 1 >= len(data):
+        return None
+    pointer = ((data[offset] & 0x3F) << 8) | data[offset + 1]
+    if pointer in visited or pointer >= len(data):
+        return None
+    visited.add(pointer)
+    return pointer
+
+
 def _decode_dns_name(data: bytes, offset: int) -> tuple[str, int]:
     """Decode a DNS name from wire format, handling pointer compression.
 
@@ -189,41 +227,60 @@ def _decode_dns_name(data: bytes, offset: int) -> tuple[str, int]:
     Returns:
         Tuple of (decoded name string, offset after the name).
     """
+    end_offset = _find_dns_name_end(data, offset)
     labels: list[str] = []
     visited: set[int] = set()
-    jumped = False
-    end_offset = offset
 
-    while True:
-        if offset >= len(data):
-            break
+    while offset < len(data):
         length = data[offset]
-
         if length == 0:
-            if not jumped:
-                end_offset = offset + 1
             break
-        elif (length & 0xC0) == 0xC0:
-            # Pointer compression
-            if offset + 1 >= len(data):
+        if (length & 0xC0) == 0xC0:
+            pointer = _follow_dns_pointer(data, offset, visited)
+            if pointer is None:
                 break
-            pointer = ((length & 0x3F) << 8) | data[offset + 1]
-            if not jumped:
-                end_offset = offset + 2
-            jumped = True
-            if pointer in visited or pointer >= len(data):
-                break
-            visited.add(pointer)
             offset = pointer
-        else:
-            offset += 1
-            if offset + length > len(data):
-                break
-            labels.append(data[offset : offset + length].decode("ascii", errors="replace"))
-            offset += length
+            continue
+        offset += 1
+        if offset + length > len(data):
+            break
+        labels.append(data[offset : offset + length].decode("ascii", errors="replace"))
+        offset += length
 
     name = ".".join(labels) + "." if labels else "."
     return name, end_offset
+
+
+def _parse_rdata(rtype: int, rdlength: int, data: bytes, rdata_start: int) -> dict:
+    """Parse type-specific RDATA for a single DNS resource record."""
+    if rtype == _DNS_TYPE_PTR:
+        target, _ = _decode_dns_name(data, rdata_start)
+        return {"target": target}
+    if rtype == _DNS_TYPE_A and rdlength == 4:
+        return {"address": socket.inet_ntoa(data[rdata_start : rdata_start + 4])}
+    if rtype == _DNS_TYPE_AAAA and rdlength == 16:
+        return {"address": socket.inet_ntop(socket.AF_INET6, data[rdata_start : rdata_start + 16])}
+    if rtype == _DNS_TYPE_SRV and rdlength >= 6:
+        priority, weight, port = struct.unpack_from(">HHH", data, rdata_start)
+        target, _ = _decode_dns_name(data, rdata_start + 6)
+        return {"priority": priority, "weight": weight, "port": port, "target": target}
+    if rtype == _DNS_TYPE_TXT:
+        return {"txt": _parse_txt_rdata(data[rdata_start : rdata_start + rdlength])}
+    return {}
+
+
+def _skip_dns_questions(data: bytes, offset: int, count: int) -> int | None:
+    """Skip *count* DNS question records starting at *offset*.
+
+    Returns the new offset, or ``None`` if parsing fails.
+    """
+    for _ in range(count):
+        try:
+            _, offset = _decode_dns_name(data, offset)
+            offset += 4  # QTYPE + QCLASS
+        except Exception:
+            return None
+    return offset
 
 
 def _parse_dns_records(data: bytes) -> list[dict]:
@@ -243,13 +300,9 @@ def _parse_dns_records(data: bytes) -> list[dict]:
     except struct.error:
         return []
 
-    offset = 12
-    for _ in range(qdcount):
-        try:
-            _, offset = _decode_dns_name(data, offset)
-            offset += 4  # QTYPE + QCLASS
-        except Exception:
-            return []
+    offset = _skip_dns_questions(data, 12, qdcount)
+    if offset is None:
+        return []
 
     records: list[dict] = []
     for _ in range(ancount + nscount + arcount):
@@ -262,26 +315,8 @@ def _parse_dns_records(data: bytes) -> list[dict]:
             rtype, _rclass, _ttl, rdlength = struct.unpack_from(">HHIH", data, offset)
             offset += 10
             rdata_start = offset
-            record: dict = {"name": name, "type": rtype}
-
-            if rtype == _DNS_TYPE_PTR:
-                target, _ = _decode_dns_name(data, rdata_start)
-                record["target"] = target
-            elif rtype == _DNS_TYPE_A and rdlength == 4:
-                record["address"] = socket.inet_ntoa(data[rdata_start : rdata_start + 4])
-            elif rtype == _DNS_TYPE_AAAA and rdlength == 16:
-                record["address"] = socket.inet_ntop(socket.AF_INET6, data[rdata_start : rdata_start + 16])
-            elif rtype == _DNS_TYPE_SRV and rdlength >= 6:
-                priority, weight, port = struct.unpack_from(">HHH", data, rdata_start)
-                target, _ = _decode_dns_name(data, rdata_start + 6)
-                record["priority"] = priority
-                record["weight"] = weight
-                record["port"] = port
-                record["target"] = target
-            elif rtype == _DNS_TYPE_TXT:
-                record["txt"] = _parse_txt_rdata(data[rdata_start : rdata_start + rdlength])
-
-            records.append(record)
+            extra = _parse_rdata(rtype, rdlength, data, rdata_start)
+            records.append({"name": name, "type": rtype, **extra})
             offset = rdata_start + rdlength
         except Exception:
             break

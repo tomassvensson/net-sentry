@@ -180,3 +180,11 @@ class TestFetchHaDevices:
             result = fetch_ha_devices("http://ha.local:8123", "token")
 
         assert result == []
+
+    def test_disallowed_url_scheme_returns_empty_list(self):
+        """fetch_ha_devices should return [] immediately for non-http/https URLs."""
+        with patch("urllib.request.urlopen") as mock_open:
+            result = fetch_ha_devices("file:///etc/passwd", "token")
+
+        assert result == []
+        mock_open.assert_not_called()

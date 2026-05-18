@@ -3,6 +3,9 @@ services:
     build: .
     container_name: net-sentry-scanner
     restart: unless-stopped
+    # NOTE: network_mode: host is Linux-only and required for raw-socket scanning.
+    # On Windows (Docker Desktop) use the override file:
+    #   docker compose -f docker-compose.yml -f docker-compose.windows.yml up
     network_mode: host
     volumes:
       - ./data:/app/data
@@ -15,7 +18,7 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
-    # Give access to Bluetooth device
+    # Give access to Bluetooth device (Linux only — omitted on Windows via override)
     devices:
       - /dev/bluetooth:/dev/bluetooth
     privileged: false

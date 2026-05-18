@@ -72,6 +72,41 @@ def parse_dhcp_leases(
     return _parse_lease_text(raw, active_only=active_only)
 
 
+def _parse_ends_timestamp(ts_raw: str) -> datetime | None:
+    """Parse an ISC DHCP ``ends`` timestamp string into a UTC datetime."""
+    try:
+        ts_str = ts_raw.replace("/", "-")  # 2024-01-02 10:00:00
+        return datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _parse_lease_block(lines: list[str], start: int) -> tuple[dict, int]:
+    """Parse a single ISC DHCP lease block starting at *start*.
+
+    Returns the parsed record dict and the updated line index (after closing ``}``).
+    """
+    record: dict = {
+        "mac_address": None,
+        "hostname": None,
+        "binding_state": "unknown",
+        "ends": None,
+    }
+    i = start
+    while i < len(lines) and "}" not in lines[i]:
+        cur = lines[i]
+        if m := _BINDING_STATE_RE.match(cur):
+            record["binding_state"] = m.group(1).lower()
+        elif m := _HARDWARE_RE.match(cur):
+            record["mac_address"] = m.group(1).upper()
+        elif m := _HOSTNAME_RE.match(cur):
+            record["hostname"] = m.group(1)
+        elif m := _ENDS_RE.match(cur):
+            record["ends"] = _parse_ends_timestamp(m.group(1))
+        i += 1
+    return record, i + 1  # skip the closing "}"
+
+
 def _parse_lease_text(text: str, *, active_only: bool) -> list[NetworkDevice]:
     """Parse the text content of a DHCP lease file.
 
@@ -95,32 +130,8 @@ def _parse_lease_text(text: str, *, active_only: bool) -> list[NetworkDevice]:
             continue
 
         ip = lease_match.group(1)
-        record: dict = {
-            "ip_address": ip,
-            "mac_address": None,
-            "hostname": None,
-            "binding_state": "unknown",
-            "ends": None,
-        }
-
-        # Collect lines until the closing brace
-        i += 1
-        while i < len(lines) and "}" not in lines[i]:
-            cur = lines[i]
-            if m := _BINDING_STATE_RE.match(cur):
-                record["binding_state"] = m.group(1).lower()
-            elif m := _HARDWARE_RE.match(cur):
-                record["mac_address"] = m.group(1).upper()
-            elif m := _HOSTNAME_RE.match(cur):
-                record["hostname"] = m.group(1)
-            elif m := _ENDS_RE.match(cur):
-                try:
-                    ts_str = m.group(1).replace("/", "-")  # 2024-01-02 10:00:00
-                    record["ends"] = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                except ValueError:
-                    pass
-            i += 1
-        i += 1  # skip closing brace
+        record, i = _parse_lease_block(lines, i + 1)
+        record["ip_address"] = ip
 
         if not record["mac_address"]:
             continue
@@ -131,10 +142,8 @@ def _parse_lease_text(text: str, *, active_only: bool) -> list[NetworkDevice]:
         existing = best.get(mac)
         if existing is None:
             best[mac] = record
-        else:
-            # Keep the lease with the later expiry time
-            if record["ends"] and (existing["ends"] is None or record["ends"] > existing["ends"]):
-                best[mac] = record
+        elif record["ends"] and (existing["ends"] is None or record["ends"] > existing["ends"]):
+            best[mac] = record
 
     devices = [
         NetworkDevice(

@@ -159,6 +159,8 @@ class AlertConfig:
     webhook_url: str = ""
     # Payload format: "slack" (default) or "pagerduty"
     webhook_format: str = "slack"
+    # Warn when a device reappears after being absent for at least this many days (0 = disabled)
+    warn_returning_after_days: int = 14
 
 
 @dataclass
@@ -367,11 +369,27 @@ def _write_jwt_secret_to_config(config_path: str, new_secret: str) -> None:
         config_path: Path to the config YAML file.
         new_secret: The new JWT secret to write.
     """
-    path = Path(config_path)
-    if not path.exists():
+    # Resolve to a canonical path to prevent path-traversal exploits.
+    # Only write to YAML files within the current working directory tree.
+    try:
+        resolved = Path(config_path).resolve()
+        allowed_base = Path.cwd().resolve()
+        resolved.relative_to(allowed_base)  # raises ValueError if outside cwd
+    except ValueError:
+        logger.warning("Refusing to write JWT secret: config path is outside the working directory: %s", config_path)
+        return
+    except (OSError, RuntimeError):
+        logger.warning("Could not resolve config path: %s", config_path)
+        return
+
+    if resolved.suffix not in (".yaml", ".yml"):
+        logger.warning("Refusing to write JWT secret to non-YAML file: %s", config_path)
+        return
+
+    if not resolved.exists():
         return
     try:
-        content = path.read_text(encoding="utf-8")
+        content = resolved.read_text(encoding="utf-8")
         lines = content.splitlines(keepends=True)
         updated_lines = []
         for line in lines:
@@ -381,10 +399,58 @@ def _write_jwt_secret_to_config(config_path: str, new_secret: str) -> None:
                 updated_lines.append(f'{indent}jwt_secret: "{new_secret}"\n')
             else:
                 updated_lines.append(line)
-        path.write_text("".join(updated_lines), encoding="utf-8")
+        resolved.write_text("".join(updated_lines), encoding="utf-8")
         logger.info("JWT secret written to %s.", config_path)
     except OSError:
         logger.warning("Could not write generated JWT secret to %s (read-only filesystem?).", config_path)
+
+
+def _parse_alert_rules(raw_rules: list) -> list[AlertRule]:
+    """Parse raw alert rule dicts into AlertRule objects."""
+    parsed: list[AlertRule] = []
+    for r in raw_rules:
+        if isinstance(r, dict) and r.get("rule_type"):
+            parsed.append(
+                AlertRule(
+                    rule_type=r["rule_type"],
+                    mac_address=r.get("mac_address"),
+                    threshold_minutes=int(r.get("threshold_minutes", 30)),
+                    start_hour=int(r.get("start_hour", 0)),
+                    end_hour=int(r.get("end_hour", 6)),
+                    device_type_filter=r.get("device_type_filter"),
+                    label=r.get("label", ""),
+                )
+            )
+    return parsed
+
+
+def _parse_alert_section(al: dict, default: AlertConfig) -> AlertConfig:
+    """Parse the 'alert' section of the raw config dict."""
+    return AlertConfig(
+        enabled=al.get("enabled", default.enabled),
+        log_new_devices=al.get("log_new_devices", default.log_new_devices),
+        log_file=al.get("log_file", default.log_file),
+        sound_enabled=al.get("sound_enabled", default.sound_enabled),
+        cooldown_seconds=al.get("cooldown_seconds", default.cooldown_seconds),
+        rules=_parse_alert_rules(al.get("rules", [])),
+        webhook_url=al.get("webhook_url", default.webhook_url),
+        webhook_format=al.get("webhook_format", default.webhook_format),
+        warn_returning_after_days=al.get("warn_returning_after_days", default.warn_returning_after_days),
+    )
+
+
+def _parse_whitelist_entries(raw_entries: list) -> list[WhitelistEntry]:
+    """Parse raw whitelist entries into WhitelistEntry objects."""
+    return [
+        WhitelistEntry(
+            mac_address=entry.get("mac_address", ""),
+            name=entry.get("name", ""),
+            category=entry.get("category", ""),
+            trusted=entry.get("trusted", True),
+        )
+        for entry in raw_entries
+        if isinstance(entry, dict) and entry.get("mac_address")
+    ]
 
 
 def _parse_raw_config(raw: dict) -> AppConfig:
@@ -483,42 +549,10 @@ def _parse_raw_config(raw: dict) -> AppConfig:
 
     if "alert" in raw:
         al = raw["alert"]
-        parsed_rules: list[AlertRule] = []
-        for r in al.get("rules", []):
-            if isinstance(r, dict) and r.get("rule_type"):
-                parsed_rules.append(
-                    AlertRule(
-                        rule_type=r["rule_type"],
-                        mac_address=r.get("mac_address"),
-                        threshold_minutes=int(r.get("threshold_minutes", 30)),
-                        start_hour=int(r.get("start_hour", 0)),
-                        end_hour=int(r.get("end_hour", 6)),
-                        device_type_filter=r.get("device_type_filter"),
-                        label=r.get("label", ""),
-                    )
-                )
-        config.alert = AlertConfig(
-            enabled=al.get("enabled", config.alert.enabled),
-            log_new_devices=al.get("log_new_devices", config.alert.log_new_devices),
-            log_file=al.get("log_file", config.alert.log_file),
-            sound_enabled=al.get("sound_enabled", config.alert.sound_enabled),
-            cooldown_seconds=al.get("cooldown_seconds", config.alert.cooldown_seconds),
-            rules=parsed_rules,
-            webhook_url=al.get("webhook_url", config.alert.webhook_url),
-            webhook_format=al.get("webhook_format", config.alert.webhook_format),
-        )
+        config.alert = _parse_alert_section(al, config.alert)
 
     if "whitelist" in raw:
-        config.whitelist = [
-            WhitelistEntry(
-                mac_address=entry.get("mac_address", ""),
-                name=entry.get("name", ""),
-                category=entry.get("category", ""),
-                trusted=entry.get("trusted", True),
-            )
-            for entry in raw["whitelist"]
-            if isinstance(entry, dict) and entry.get("mac_address")
-        ]
+        config.whitelist = _parse_whitelist_entries(raw["whitelist"])
 
     if "oui" in raw:
         o = raw["oui"]
@@ -591,6 +625,23 @@ def _parse_raw_config(raw: dict) -> AppConfig:
     return config
 
 
+def _env(primary: str, fallback: str) -> str | None:
+    """Return the first non-empty value from two environment variable names."""
+    return os.environ.get(primary) or os.environ.get(fallback) or None
+
+
+def _env_int(primary: str, fallback: str) -> int | None:
+    """Return an environment variable as int, warning on invalid values."""
+    raw = _env(primary, fallback)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Invalid %s environment variable value: %s", primary, raw)
+        return None
+
+
 def _apply_env_overrides(config: AppConfig) -> AppConfig:
     """Apply environment variable overrides to configuration.
 
@@ -606,28 +657,22 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
     if db_url := os.environ.get("DATABASE_URL"):
         config.database.url = db_url
 
-    if jwt_secret := (os.environ.get("NET_SENTRY_JWT_SECRET") or os.environ.get("BTWIFI_JWT_SECRET")):
+    if jwt_secret := _env("NET_SENTRY_JWT_SECRET", "BTWIFI_JWT_SECRET"):
         config.api.jwt_secret = jwt_secret
 
-    if cors := (os.environ.get("NET_SENTRY_CORS_ORIGINS") or os.environ.get("BTWIFI_CORS_ORIGINS")):
+    if cors := _env("NET_SENTRY_CORS_ORIGINS", "BTWIFI_CORS_ORIGINS"):
         config.api.cors_origins = [o.strip() for o in cors.split(",") if o.strip()]
 
-    if auth_enabled := (os.environ.get("NET_SENTRY_AUTH_ENABLED") or os.environ.get("BTWIFI_AUTH_ENABLED")):
+    if auth_enabled := _env("NET_SENTRY_AUTH_ENABLED", "BTWIFI_AUTH_ENABLED"):
         config.api.auth_enabled = auth_enabled.lower() in ("1", "true", "yes")
 
-    if interval := (os.environ.get("NET_SENTRY_SCAN_INTERVAL") or os.environ.get("BTWIFI_SCAN_INTERVAL")):
-        try:
-            config.scan.interval_seconds = int(interval)
-        except ValueError:
-            logger.warning("Invalid NET_SENTRY_SCAN_INTERVAL: %s", interval)
+    if (interval := _env_int("NET_SENTRY_SCAN_INTERVAL", "BTWIFI_SCAN_INTERVAL")) is not None:
+        config.scan.interval_seconds = interval
 
-    if continuous := (os.environ.get("NET_SENTRY_CONTINUOUS") or os.environ.get("BTWIFI_CONTINUOUS")):
+    if continuous := _env("NET_SENTRY_CONTINUOUS", "BTWIFI_CONTINUOUS"):
         config.scan.continuous = continuous.lower() in ("1", "true", "yes")
 
-    if gap := (os.environ.get("NET_SENTRY_GAP_SECONDS") or os.environ.get("BTWIFI_GAP_SECONDS")):
-        try:
-            config.scan.gap_seconds = int(gap)
-        except ValueError:
-            logger.warning("Invalid NET_SENTRY_GAP_SECONDS: %s", gap)
+    if (gap := _env_int("NET_SENTRY_GAP_SECONDS", "BTWIFI_GAP_SECONDS")) is not None:
+        config.scan.gap_seconds = gap
 
     return config

@@ -109,6 +109,94 @@ def scan_monitor_mode(
         return []
 
 
+def _extract_signal(pkt: object) -> float | None:
+    """Extract RSSI from RadioTap layer, or None if unavailable."""
+    from scapy.all import RadioTap  # type: ignore[import-untyped]
+
+    if pkt.haslayer(RadioTap):  # type: ignore[union-attr]
+        radiotap = pkt.getlayer(RadioTap)  # type: ignore[union-attr,attr-defined]
+        if hasattr(radiotap, "dBm_AntSignal"):
+            return float(radiotap.dBm_AntSignal)
+    return None
+
+
+def _extract_frame_info(pkt: object) -> tuple[str, str | None]:
+    """Return (frame_type, ssid) for a Dot11 packet."""
+    from scapy.all import Dot11Beacon, Dot11Elt, Dot11ProbeReq  # type: ignore[import-untyped]
+
+    ssid: str | None = None
+    if pkt.haslayer(Dot11Beacon):  # type: ignore[union-attr]
+        frame_type = "beacon"
+        elt = pkt.getlayer(Dot11Elt)  # type: ignore[union-attr,attr-defined]
+        if elt and elt.ID == 0:
+            with contextlib.suppress(UnicodeDecodeError, AttributeError):
+                ssid = elt.info.decode("utf-8", errors="replace")
+    elif pkt.haslayer(Dot11ProbeReq):  # type: ignore[union-attr]
+        frame_type = "probe_request"
+        elt = pkt.getlayer(Dot11Elt)  # type: ignore[union-attr,attr-defined]
+        if elt and elt.ID == 0:
+            with contextlib.suppress(UnicodeDecodeError, AttributeError):
+                ssid = elt.info.decode("utf-8", errors="replace")
+    else:
+        frame_type = "data"
+    return frame_type, ssid
+
+
+def _update_device(
+    devices: dict[str, MonitorModeDevice],
+    src_mac: str,
+    signal: float | None,
+    frame_type: str,
+    ssid: str | None,
+    scan_time: datetime,
+) -> None:
+    """Insert a new device entry or update an existing one in-place."""
+    if src_mac not in devices:
+        devices[src_mac] = MonitorModeDevice(
+            mac_address=src_mac,
+            signal_dbm=signal,
+            frame_type=frame_type,
+            ssid=ssid,
+            scan_time=scan_time,
+        )
+    else:
+        existing = devices[src_mac]
+        if signal is not None and (existing.signal_dbm is None or signal > existing.signal_dbm):
+            existing.signal_dbm = signal
+        if frame_type in ("beacon", "probe_request"):
+            existing.frame_type = frame_type
+        if ssid and not existing.ssid:
+            existing.ssid = ssid
+    if frame_type == "probe_request":
+        ssid_key = ssid if ssid else ""
+        if ssid_key not in devices[src_mac].probed_ssids:
+            devices[src_mac].probed_ssids.append(ssid_key)
+
+
+def _process_dot11_packet(
+    pkt: object,
+    devices: dict[str, MonitorModeDevice],
+    scan_time: datetime,
+) -> None:
+    """Process a single captured 802.11 frame and update the devices map."""
+    from scapy.all import Dot11  # type: ignore[import-untyped]
+
+    if not hasattr(pkt, "haslayer"):
+        return
+    if not pkt.haslayer(Dot11):  # type: ignore[union-attr]
+        return
+    dot11 = pkt.getlayer(Dot11)  # type: ignore[union-attr,attr-defined]
+    if dot11 is None:
+        return
+    src_mac = dot11.addr2
+    if not src_mac or src_mac == "ff:ff:ff:ff:ff:ff":
+        return
+    src_mac = src_mac.upper()
+    signal = _extract_signal(pkt)
+    frame_type, ssid = _extract_frame_info(pkt)
+    _update_device(devices, src_mac, signal, frame_type, ssid, scan_time)
+
+
 def _capture_frames(
     interface: str,
     duration_seconds: int,
@@ -124,8 +212,7 @@ def _capture_frames(
     Returns:
         List of detected devices.
     """
-    # Import scapy only when actually needed
-    from scapy.all import Dot11, Dot11Beacon, Dot11Elt, Dot11ProbeReq, RadioTap, sniff
+    from scapy.all import sniff  # type: ignore[import-untyped]
 
     devices: dict[str, MonitorModeDevice] = {}
     scan_time = datetime.now(timezone.utc)
@@ -137,83 +224,15 @@ def _capture_frames(
         channel_hop,
     )
 
-    def process_packet(pkt: object) -> None:
-        """Process a captured 802.11 frame."""
-        if not hasattr(pkt, "haslayer"):
-            return
-
-        if not pkt.haslayer(Dot11):
-            return
-
-        dot11 = pkt.getlayer(Dot11)  # type: ignore[attr-defined]
-        if dot11 is None:
-            return
-
-        # Extract source MAC
-        src_mac = dot11.addr2
-        if not src_mac or src_mac == "ff:ff:ff:ff:ff:ff":
-            return
-
-        src_mac = src_mac.upper()
-
-        # Extract signal strength from RadioTap header
-        signal = None
-        if pkt.haslayer(RadioTap):
-            radiotap = pkt.getlayer(RadioTap)  # type: ignore[attr-defined]
-            if hasattr(radiotap, "dBm_AntSignal"):
-                signal = float(radiotap.dBm_AntSignal)
-
-        # Determine frame type
-        frame_type = "data"
-        ssid = None
-
-        if pkt.haslayer(Dot11Beacon):
-            frame_type = "beacon"
-            elt = pkt.getlayer(Dot11Elt)  # type: ignore[attr-defined]
-            if elt and elt.ID == 0:
-                with contextlib.suppress(UnicodeDecodeError, AttributeError):
-                    ssid = elt.info.decode("utf-8", errors="replace")
-        elif pkt.haslayer(Dot11ProbeReq):
-            frame_type = "probe_request"
-            elt = pkt.getlayer(Dot11Elt)  # type: ignore[attr-defined]
-            if elt and elt.ID == 0:
-                with contextlib.suppress(UnicodeDecodeError, AttributeError):
-                    ssid = elt.info.decode("utf-8", errors="replace")
-
-        if src_mac not in devices:
-            devices[src_mac] = MonitorModeDevice(
-                mac_address=src_mac,
-                signal_dbm=signal,
-                frame_type=frame_type,
-                ssid=ssid if ssid else None,
-                scan_time=scan_time,
-            )
-        else:
-            # Update signal if stronger
-            existing = devices[src_mac]
-            if signal is not None and (existing.signal_dbm is None or signal > existing.signal_dbm):
-                existing.signal_dbm = signal
-            # Prefer beacon/probe_request frame types over generic data
-            if frame_type in ("beacon", "probe_request"):
-                existing.frame_type = frame_type
-            if ssid and not existing.ssid:
-                existing.ssid = ssid
-
-        # Accumulate probed SSIDs (de-duplicated, including empty wildcard probes)
-        if frame_type == "probe_request":
-            ssid_key = ssid if ssid else ""
-            if ssid_key not in devices[src_mac].probed_ssids:
-                devices[src_mac].probed_ssids.append(ssid_key)
-
     try:
         sniff(
             iface=interface,
-            prn=process_packet,
+            prn=lambda pkt: _process_dot11_packet(pkt, devices, scan_time),
             timeout=duration_seconds,
             store=False,
         )
-    except OSError as exc:
-        logger.error("Cannot open interface %s: %s", interface, exc)
+    except OSError:
+        logger.exception("Cannot open interface %s", interface)
         return []
 
     logger.info("Monitor mode capture complete: %d unique devices", len(devices))

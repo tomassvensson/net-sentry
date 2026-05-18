@@ -16,6 +16,7 @@ import logging
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,13 @@ def fetch_ha_devices(
         List of HaDevice objects with name/area/IP/MAC info.
     """
     url = ha_url.rstrip("/") + "/api/states"
+
+    # Validate URL scheme to prevent SSRF — only http/https are permitted.
+    parsed_scheme = urlparse(url).scheme.lower()
+    if parsed_scheme not in ("http", "https"):
+        logger.error("Home Assistant URL has disallowed scheme %r; aborting", parsed_scheme)
+        return []
+
     req = urllib.request.Request(
         url,
         headers={
@@ -62,19 +70,19 @@ def fetch_ha_devices(
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
             raw_data = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        logger.error("Home Assistant API error: HTTP %d for %s", exc.code, url)
+        logger.exception("Home Assistant API error: HTTP %d for %s", exc.code, url)
         return []
-    except urllib.error.URLError as exc:
-        logger.error("Home Assistant connection failed: %s", exc.reason)
+    except urllib.error.URLError:
+        logger.exception("Home Assistant connection failed")
         return []
     except TimeoutError:
-        logger.error("Home Assistant request timed out after %.1fs", timeout)
+        logger.exception("Home Assistant request timed out after %.1fs", timeout)
         return []
 
     try:
         states: list[dict] = json.loads(raw_data)
     except json.JSONDecodeError:
-        logger.error("Home Assistant returned non-JSON response.")
+        logger.exception("Home Assistant returned non-JSON response.")
         return []
 
     devices: list[HaDevice] = []

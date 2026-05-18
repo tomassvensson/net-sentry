@@ -1,0 +1,18 @@
+# Windows Docker Desktop override
+#
+# Use this file together with docker-compose.yml on Windows:
+#   docker compose -f docker-compose.yml -f docker-compose.windows.yml up
+#
+# Differences from the default Linux configuration:
+#   - network_mode: host is replaced with explicit port mapping (not supported on Windows Docker Desktop)
+#   - The /dev/bluetooth device mount is removed (not available on Windows)
+#   - Bluetooth scanning is automatically disabled when no device is reachable
+#
+# The dashboard and API are reachable at http://localhost:8000
+
+services:
+  net-sentry:
+    network_mode: ""
+    ports:
+      - "8000:8000"
+    devices: !reset []

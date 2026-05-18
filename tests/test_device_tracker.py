@@ -100,9 +100,10 @@ class TestUpdateVisibility:
     def test_create_new_window(self, in_memory_engine) -> None:
         now = datetime.now(timezone.utc)
         with get_session(in_memory_engine) as session:
-            window, is_new = update_visibility(session, "AA:BB:CC:DD:EE:FF", now, -65.0)
+            window, is_new, prev = update_visibility(session, "AA:BB:CC:DD:EE:FF", now, -65.0)
             session.flush()
             assert is_new is True
+            assert prev is None
             assert window.first_seen == now
             assert window.last_seen == now
             assert window.signal_strength_dbm == -65.0
@@ -115,7 +116,7 @@ class TestUpdateVisibility:
         with get_session(in_memory_engine) as session:
             update_visibility(session, "AA:BB:CC:DD:EE:FF", now, -65.0)
             session.flush()
-            window, is_new = update_visibility(session, "AA:BB:CC:DD:EE:FF", later, -70.0)
+            window, is_new, _ = update_visibility(session, "AA:BB:CC:DD:EE:FF", later, -70.0)
             session.flush()
             assert is_new is False
             # SQLite strips timezone info, so compare without tz

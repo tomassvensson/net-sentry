@@ -88,8 +88,8 @@ def scan_ssdp_devices(timeout: float = _SSDP_TIMEOUT) -> list[SsdpDevice]:
 
         sock.close()
 
-    except OSError as exc:
-        logger.error("SSDP discovery failed: %s", exc)
+    except OSError:
+        logger.exception("SSDP discovery failed")
 
     logger.info("SSDP discovery complete: found %d devices.", len(devices))
     return devices

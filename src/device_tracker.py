@@ -102,7 +102,7 @@ def update_visibility(
     scan_time: datetime,
     signal_dbm: float | None = None,
     gap_seconds: int = DEFAULT_GAP_SECONDS,
-) -> tuple[VisibilityWindow, bool]:
+) -> tuple[VisibilityWindow, bool, datetime | None]:
     """Update or create a visibility window for a device.
 
     If the device was last seen within `gap_seconds`, extend the current
@@ -116,8 +116,10 @@ def update_visibility(
         gap_seconds: Max gap in seconds before starting a new window.
 
     Returns:
-        Tuple of (VisibilityWindow, is_new_window) where is_new_window is True
-        when a new window was created (i.e. the device reconnected).
+        Tuple of (VisibilityWindow, is_new_window, previous_last_seen) where
+        is_new_window is True when a new window was created (i.e. the device
+        reconnected) and previous_last_seen is the last_seen of the most recent
+        prior window (only set when is_new_window=True, None otherwise).
     """
     cutoff = scan_time - timedelta(seconds=gap_seconds)
 
@@ -142,10 +144,19 @@ def update_visibility(
                 window.min_signal_dbm = signal_dbm
             if window.max_signal_dbm is None or signal_dbm > window.max_signal_dbm:
                 window.max_signal_dbm = signal_dbm
-        return window, False
+        return window, False, None
     else:
+        # Find the most recent prior window to determine how long the device was absent
+        prior_window = (
+            session.query(VisibilityWindow)
+            .filter(VisibilityWindow.mac_address == mac_address)
+            .order_by(VisibilityWindow.last_seen.desc())
+            .first()
+        )
+        previous_last_seen = prior_window.last_seen if prior_window is not None else None
+
         # Create new visibility window
-        window = VisibilityWindow(
+        new_window = VisibilityWindow(
             mac_address=mac_address,
             first_seen=scan_time,
             last_seen=scan_time,
@@ -154,15 +165,15 @@ def update_visibility(
             max_signal_dbm=signal_dbm,
             scan_count=1,
         )
-        session.add(window)
-        return window, True
+        session.add(new_window)
+        return new_window, True, previous_last_seen
 
 
 def track_wifi_scan(
     session: Session,
     networks: list[WifiNetwork],
     gap_seconds: int = DEFAULT_GAP_SECONDS,
-) -> list[tuple[Device, VisibilityWindow]]:
+) -> list[tuple[Device, VisibilityWindow, datetime | None]]:
     """Process a WiFi scan result: update devices and visibility windows.
 
     Args:
@@ -171,12 +182,14 @@ def track_wifi_scan(
         gap_seconds: Max gap seconds for visibility windows.
 
     Returns:
-        List of (Device, VisibilityWindow) tuples for each network.
+        List of (Device, VisibilityWindow, previous_last_seen) tuples for each
+        network.  ``previous_last_seen`` is the last_seen of the most recent
+        prior window when a new window is opened, or ``None`` otherwise.
     """
-    results: list[tuple[Device, VisibilityWindow]] = []
+    results: list[tuple[Device, VisibilityWindow, datetime | None]] = []
     for network in networks:
         device = upsert_wifi_device(session, network)
-        window, is_new = update_visibility(
+        window, is_new, previous_last_seen = update_visibility(
             session,
             mac_address=network.bssid,
             scan_time=network.scan_time,
@@ -185,7 +198,7 @@ def track_wifi_scan(
         )
         if is_new and device.reconnect_count is not None:
             device.reconnect_count += 1
-        results.append((device, window))
+        results.append((device, window, previous_last_seen))
     return results
 
 
@@ -193,7 +206,7 @@ def track_bluetooth_scan(
     session: Session,
     bt_devices: list[BluetoothDevice],
     gap_seconds: int = DEFAULT_GAP_SECONDS,
-) -> list[tuple[Device, VisibilityWindow]]:
+) -> list[tuple[Device, VisibilityWindow, datetime | None]]:
     """Process a Bluetooth scan result: update devices and visibility windows.
 
     Args:
@@ -202,14 +215,16 @@ def track_bluetooth_scan(
         gap_seconds: Max gap seconds for visibility windows.
 
     Returns:
-        List of (Device, VisibilityWindow) tuples for each device.
+        List of (Device, VisibilityWindow, previous_last_seen) tuples for each
+        device.  ``previous_last_seen`` is the last_seen of the most recent
+        prior window when a new window is opened, or ``None`` otherwise.
     """
-    results: list[tuple[Device, VisibilityWindow]] = []
+    results: list[tuple[Device, VisibilityWindow, datetime | None]] = []
     for bt_device in bt_devices:
         device = upsert_bluetooth_device(session, bt_device)
         if device is None:
             continue
-        window, is_new = update_visibility(
+        window, is_new, previous_last_seen = update_visibility(
             session,
             mac_address=bt_device.mac_address,
             scan_time=bt_device.scan_time,
@@ -218,7 +233,7 @@ def track_bluetooth_scan(
         )
         if is_new and device.reconnect_count is not None:
             device.reconnect_count += 1
-        results.append((device, window))
+        results.append((device, window, previous_last_seen))
     return results
 
 
@@ -246,6 +261,18 @@ def get_all_devices_with_latest_window(
         results.append((device, window))
 
     return results
+
+
+def _bulk_upsert_portable(session: Session, rows: list[dict]) -> None:
+    """Portable device upsert for non-SQLite databases (merge per row)."""
+    for row in rows:
+        existing = session.query(Device).filter_by(mac_address=row["mac_address"]).first()
+        if existing is None:
+            session.add(Device(**row))
+        else:
+            for key, val in row.items():
+                if val is not None:
+                    setattr(existing, key, val)
 
 
 def bulk_upsert_network_devices(session: Session, devices: list[NetworkDevice]) -> int:
@@ -295,14 +322,6 @@ def bulk_upsert_network_devices(session: Session, devices: list[NetworkDevice]) 
         stmt = stmt.on_conflict_do_update(index_elements=["mac_address"], set_=update_cols)
         session.execute(stmt)
     else:
-        # Portable fallback: individual merge per row
-        for row in rows:
-            existing = session.query(Device).filter_by(mac_address=row["mac_address"]).first()
-            if existing is None:
-                session.add(Device(**row))
-            else:
-                for key, val in row.items():
-                    if val is not None:
-                        setattr(existing, key, val)
+        _bulk_upsert_portable(session, rows)
 
     return len(rows)
