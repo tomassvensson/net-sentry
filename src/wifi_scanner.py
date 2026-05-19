@@ -287,7 +287,7 @@ def _parse_iw_line(stripped: str, current: dict[str, object]) -> None:
         current["ssid"] = stripped.split(":", 1)[1].strip() or _HIDDEN_SSID
         return
     if stripped.startswith("signal:"):
-        m = re.search(r"(-?\d+(?:\.\d+)?)\s*dBm", stripped)  # NOSONAR — regex complexity is linear, no backtracking ambiguity
+        m = re.search(r"(-?\d+(?:\.\d+)?)\s*dBm", stripped)  # NOSONAR
         if m:
             current["signal_dbm"] = float(m.group(1))
         return
