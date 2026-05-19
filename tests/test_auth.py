@@ -168,3 +168,12 @@ def test_get_jwt_expire_minutes(monkeypatch):
 
     monkeypatch.setattr(auth_mod, "_jwt_expire_minutes", 42)
     assert auth_mod.get_jwt_expire_minutes() == 42
+
+
+def test_verify_password_invalid_hash_returns_false():
+    """verify_password returns False when bcrypt.checkpw raises (malformed hash)."""
+    from src.auth import verify_password
+
+    # A non-bcrypt string causes bcrypt.checkpw to raise ValueError
+    result = verify_password("somepassword", "not-a-valid-bcrypt-hash")
+    assert result is False

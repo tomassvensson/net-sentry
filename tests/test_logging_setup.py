@@ -137,6 +137,26 @@ class TestBuildJsonFormatter:
         assert parsed.get("logger") == "my.logger"
         assert "name" not in parsed
 
+    def test_import_error_falls_back_to_plain_formatter(self, monkeypatch) -> None:
+        """_build_json_formatter falls back to plain when pythonjsonlogger is missing."""
+        import sys
+
+        # Block the pythonjsonlogger.json sub-module so the import inside the
+        # function raises ImportError, exercising the except ImportError branch.
+        monkeypatch.setitem(sys.modules, "pythonjsonlogger", None)
+        monkeypatch.setitem(sys.modules, "pythonjsonlogger.json", None)
+
+        # Must call the function after patching; use importlib to get a fresh reference
+        import importlib
+
+        import src.logging_setup as ls_mod
+
+        importlib.reload(ls_mod)
+        result = ls_mod._build_json_formatter()
+        assert isinstance(result, logging.Formatter)
+        # Restore the reloaded module so other tests stay unaffected
+        importlib.reload(ls_mod)
+
 
 class TestJsonLoggingConfig:
     def test_json_logging_default_false(self) -> None:
