@@ -19,7 +19,7 @@ from src.oui_lookup import is_randomized_mac, lookup_vendor
 logger = logging.getLogger(__name__)
 
 # mDNS multicast address and port (RFC 6762)
-_MDNS_ADDR = "224.0.0.251"
+_MDNS_ADDR = "224.0.0.251"  # NOSONAR - standard mDNS multicast address (RFC 6762)
 _MDNS_PORT = 5353
 
 # DNS record types

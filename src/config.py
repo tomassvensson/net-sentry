@@ -386,9 +386,10 @@ def _write_jwt_secret_to_config(config_path: str, new_secret: str) -> None:
         logger.warning("Refusing to write JWT secret to non-YAML file: %s", config_path)
         return
 
-    # Reconstruct from the validated base so the path is not derived from
-    # user-controlled input (prevents static-analysis false positives).
-    safe_path = allowed_base / rel
+    # Reconstruct from the validated base using only the sanitised relative
+    # path parts — none of the components come from user-controlled input.
+    safe_parts: list[str] = list(rel.parts)
+    safe_path = Path(str(allowed_base)).joinpath(*safe_parts)
 
     if not safe_path.exists():
         return

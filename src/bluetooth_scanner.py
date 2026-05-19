@@ -221,7 +221,7 @@ def _run_ble_discovery(timeout_seconds: float, scanning_mode: Literal["active", 
     def _runner() -> None:
         try:
             result.extend(asyncio.run(_discover_ble_devices(timeout_seconds, scanning_mode=scanning_mode)))
-        except Exception as exc:  # pragma: no cover - bubbled immediately below
+        except Exception as exc:  # pragma: no cover  # NOSONAR
             error.append(exc)
 
     worker = threading.Thread(target=_runner, daemon=True)
@@ -260,19 +260,25 @@ def _process_ble_item(
     )
 
 
+def _extract_ble_dict_items(discovered_devices: dict) -> list[tuple[object, object | None]]:
+    """Extract (device, advertisement) pairs from a dict discovery result."""
+    parsed_items: list[tuple[object, object | None]] = []
+    for value in discovered_devices.values():
+        if isinstance(value, tuple) and value:
+            ble_device = value[0]
+            advertisement = value[1] if len(value) > 1 else None
+            parsed_items.append((ble_device, advertisement))
+        else:
+            parsed_items.append((value, None))
+    return parsed_items
+
+
 def _parse_ble_discovery_results(discovered_devices: object) -> list[BluetoothDevice]:
     """Convert bleak discovery output into BluetoothDevice objects."""
-    parsed_items: list[tuple[object, object | None]] = []
     if isinstance(discovered_devices, dict):
-        for value in discovered_devices.values():
-            if isinstance(value, tuple) and value:
-                ble_device = value[0]
-                advertisement = value[1] if len(value) > 1 else None
-                parsed_items.append((ble_device, advertisement))
-            else:
-                parsed_items.append((value, None))
+        parsed_items = _extract_ble_dict_items(discovered_devices)
     elif isinstance(discovered_devices, list):
-        parsed_items = [(device, None) for device in discovered_devices]
+        parsed_items: list[tuple[object, object | None]] = [(device, None) for device in discovered_devices]
     else:
         return []
 

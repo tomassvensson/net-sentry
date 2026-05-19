@@ -16,7 +16,7 @@ from src.oui_lookup import is_randomized_mac, lookup_vendor, normalize_mac
 logger = logging.getLogger(__name__)
 
 # SSDP multicast address and port
-_SSDP_ADDR = "239.255.255.250"
+_SSDP_ADDR = "239.255.255.250"  # NOSONAR - standard SSDP multicast address (RFC 2608)
 _SSDP_PORT = 1900
 _SSDP_TIMEOUT = 3.0
 

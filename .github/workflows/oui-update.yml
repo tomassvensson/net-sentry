@@ -10,6 +10,9 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   update-oui:
     runs-on: ubuntu-latest
@@ -27,14 +30,8 @@ jobs:
       - name: Check for changes
         id: diff
         run: |
-          if git diff --quiet src/data/oui.csv 2>/dev/null || \
-             ! git ls-files --error-unmatch src/data/oui.csv 2>/dev/null; then
-            # File is new (untracked) or modified
-            if git status --short src/data/oui.csv | grep -q .; then
-              echo "changed=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "changed=false" >> "$GITHUB_OUTPUT"
-            fi
+          if [ -n "$(git status --short src/data/oui.csv)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi

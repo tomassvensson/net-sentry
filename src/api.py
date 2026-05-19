@@ -343,7 +343,7 @@ def list_devices(
     }
 
 
-@v1.get("/devices/{mac_address}")
+@v1.get("/devices/{mac_address}", responses={404: {"description": "Device not found"}})
 @limiter.limit("200/minute")
 def get_device(
     request: Request,
@@ -377,7 +377,7 @@ def get_device(
     return result
 
 
-@v1.get("/devices/{mac_address}/windows")
+@v1.get("/devices/{mac_address}/windows", responses={404: {"description": "Device not found"}})
 @limiter.limit("100/minute")
 def get_device_windows(
     request: Request,
@@ -763,7 +763,7 @@ def device_timeline_page(
     )
 
 
-@v1.get("/devices/{mac_address}/windows-table", response_class=HTMLResponse)
+@v1.get("/devices/{mac_address}/windows-table", response_class=HTMLResponse, responses={404: {"description": "Device not found"}})
 def windows_table_fragment(
     request: Request,
     mac_address: str,
