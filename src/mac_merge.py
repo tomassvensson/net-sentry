@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import update
@@ -262,7 +262,7 @@ def merge_device(
         )
         # Mark source as merged
         source.merged_into = target_mac
-        source.updated_at = datetime.now(timezone.utc)
+        source.updated_at = datetime.now(UTC)
         session.commit()
 
     return window_count

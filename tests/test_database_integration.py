@@ -13,6 +13,7 @@ without Docker Desktop, Windows CI runners, etc.).
 from __future__ import annotations
 
 import logging
+from datetime import UTC
 
 import pytest
 
@@ -160,7 +161,7 @@ class TestPostgresCRUD:
 
     @pytest.mark.timeout(120)
     def test_insert_visibility_window(self, pg_engine) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from src.database import get_session
         from src.models import Device, VisibilityWindow
@@ -169,7 +170,7 @@ class TestPostgresCRUD:
             session.add(Device(mac_address="AA:BB:CC:DD:EE:03", device_type="bluetooth"))
             session.flush()
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             window = VisibilityWindow(
                 mac_address="AA:BB:CC:DD:EE:03",
                 first_seen=now,
@@ -187,7 +188,7 @@ class TestPostgresCRUD:
 
     @pytest.mark.timeout(120)
     def test_multiple_windows_per_device(self, pg_engine) -> None:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         from src.database import get_session
         from src.models import Device, VisibilityWindow
@@ -196,7 +197,7 @@ class TestPostgresCRUD:
             session.add(Device(mac_address="AA:BB:CC:DD:EE:04", device_type="wifi_ap"))
             session.flush()
 
-            base = datetime.now(timezone.utc)
+            base = datetime.now(UTC)
             for i in range(3):
                 session.add(
                     VisibilityWindow(

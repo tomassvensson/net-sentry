@@ -1,6 +1,6 @@
 """Tests for src/database.py — data retention / VACUUM helpers."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import create_engine
 
@@ -17,7 +17,7 @@ def _in_memory_engine():
 
 def _make_window(session, mac: str, days_ago_end: float) -> VisibilityWindow:
     """Insert a VisibilityWindow whose last_seen is ``days_ago_end`` days in the past."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     end = now - timedelta(days=days_ago_end)
     start = end - timedelta(hours=1)
     window = VisibilityWindow(
@@ -76,7 +76,7 @@ def test_purge_old_windows_removes_old_records():
     # Normalise to naive UTC for comparison regardless of SQLAlchemy dialect behaviour
     if last_seen.tzinfo is not None:
         last_seen = last_seen.replace(tzinfo=None)
-    naive_cutoff = (datetime.now(timezone.utc) - timedelta(days=11)).replace(tzinfo=None)
+    naive_cutoff = (datetime.now(UTC) - timedelta(days=11)).replace(tzinfo=None)
     assert last_seen > naive_cutoff
 
 

@@ -1,6 +1,6 @@
 """Tests for main module — display and scan orchestration."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -221,7 +221,7 @@ class TestDisplayResults:
 
     @pytest.mark.timeout(30)
     def test_with_devices(self, in_memory_engine, capsys) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(in_memory_engine) as session:
             device = Device(
                 mac_address="AA:BB:CC:DD:EE:FF",
@@ -256,7 +256,7 @@ class TestDisplayResults:
 
     @pytest.mark.timeout(30)
     def test_hides_multicast_protocol_entries(self, in_memory_engine, capsys) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(in_memory_engine) as session:
             session.add(
                 Device(
@@ -836,7 +836,7 @@ class TestDisplayWhitelistedDevice:
 
     @pytest.mark.timeout(30)
     def test_whitelisted_device_has_checkmark(self, in_memory_engine, capsys) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         wl = MagicMock()
         wl.get_custom_name.return_value = "KnownDevice"
 

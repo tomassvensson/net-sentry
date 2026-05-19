@@ -9,7 +9,7 @@ import logging
 import socket
 import struct
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class NetBiosInfo:
     netbios_name: str = ""
     domain: str = ""
     mac_address: str = ""
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 def resolve_netbios_name(ip_address: str, timeout: float = _NBNS_TIMEOUT) -> NetBiosInfo | None:

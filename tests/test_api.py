@@ -1,7 +1,7 @@
 """Tests for FastAPI application and REST API endpoints."""
 
 from collections.abc import Generator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
@@ -32,7 +32,7 @@ def db_engine():
 def client(db_engine):
     """Create a test client with dependency override."""
 
-    def _override_get_db() -> Generator[Session, None, None]:
+    def _override_get_db() -> Generator[Session]:
         with get_session(db_engine) as session:
             yield session
 
@@ -47,7 +47,7 @@ def client(db_engine):
 @pytest.fixture()
 def seeded_client(db_engine):
     """Create a test client with seeded data."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with get_session(db_engine) as session:
         d = Device(
             mac_address="AA:BB:CC:DD:EE:FF",
@@ -73,7 +73,7 @@ def seeded_client(db_engine):
         )
         session.add(w)
 
-    def _override_get_db() -> Generator[Session, None, None]:
+    def _override_get_db() -> Generator[Session]:
         with get_session(db_engine) as session:
             yield session
 
@@ -242,7 +242,7 @@ class TestSetEngine:
     def test_set_and_clear(self, db_engine) -> None:
         from collections.abc import Generator
 
-        def _override() -> Generator[Session, None, None]:
+        def _override() -> Generator[Session]:
             with get_session(db_engine) as session:
                 yield session
 

@@ -16,7 +16,7 @@ import re
 import subprocess
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from src.oui_lookup import is_randomized_mac, lookup_vendor, normalize_mac
@@ -35,7 +35,7 @@ class BluetoothDevice:
     device_class: str | None = None
     vendor: str | None = None
     is_randomized: bool = False
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:
         """Post-initialization: look up vendor and check for randomization."""

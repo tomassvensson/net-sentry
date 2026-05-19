@@ -9,7 +9,7 @@ import re
 import socket
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.oui_lookup import is_randomized_mac, lookup_vendor, normalize_mac
 
@@ -39,7 +39,7 @@ class SsdpDevice:
     device_type: str = ""
     vendor: str | None = None
     is_randomized: bool = False
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 def scan_ssdp_devices(timeout: float = _SSDP_TIMEOUT) -> list[SsdpDevice]:

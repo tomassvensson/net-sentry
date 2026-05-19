@@ -43,7 +43,7 @@ class TestDockerComposeStack:
     """
 
     @pytest.fixture(scope="class", autouse=True)
-    def compose_stack(self) -> Generator[None, None, None]:
+    def compose_stack(self) -> Generator[None]:
         """Start the dashboards stack, yield, then tear it down."""
         import subprocess
 

@@ -6,7 +6,7 @@ Provides deterministic mock scanner data so tests run without real hardware
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
@@ -26,8 +26,8 @@ from src.wifi_scanner import WifiNetwork
 # ---------------------------------------------------------------------------
 # Fixed timestamps for reproducible tests
 # ---------------------------------------------------------------------------
-_T0 = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-_T1 = datetime(2025, 1, 1, 12, 5, 0, tzinfo=timezone.utc)
+_T0 = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
+_T1 = datetime(2025, 1, 1, 12, 5, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ def in_memory_engine():
 
 
 @pytest.fixture()
-def db_session(in_memory_engine) -> Generator[Session, None, None]:
+def db_session(in_memory_engine) -> Generator[Session]:
     """Yield a database session backed by the in-memory engine."""
     from src.database import get_session
 

@@ -1,6 +1,6 @@
 """Tests for device tracker (visibility window management)."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -98,7 +98,7 @@ class TestUpdateVisibility:
 
     @pytest.mark.timeout(30)
     def test_create_new_window(self, in_memory_engine) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(in_memory_engine) as session:
             window, is_new, prev = update_visibility(session, "AA:BB:CC:DD:EE:FF", now, -65.0)
             session.flush()
@@ -111,7 +111,7 @@ class TestUpdateVisibility:
 
     @pytest.mark.timeout(30)
     def test_extend_existing_window(self, in_memory_engine) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         later = now + timedelta(seconds=60)
         with get_session(in_memory_engine) as session:
             update_visibility(session, "AA:BB:CC:DD:EE:FF", now, -65.0)
@@ -129,7 +129,7 @@ class TestUpdateVisibility:
 
     @pytest.mark.timeout(30)
     def test_new_window_after_gap(self, in_memory_engine) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         much_later = now + timedelta(seconds=600)  # 10 minutes > 5 minute gap
         with get_session(in_memory_engine) as session:
             update_visibility(session, "AA:BB:CC:DD:EE:FF", now, -65.0, gap_seconds=300)
@@ -142,7 +142,7 @@ class TestUpdateVisibility:
 
     @pytest.mark.timeout(30)
     def test_signal_min_max_tracking(self, in_memory_engine) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(in_memory_engine) as session:
             update_visibility(session, "AA:BB:CC:DD:EE:FF", now, -60.0)
             update_visibility(session, "AA:BB:CC:DD:EE:FF", now + timedelta(seconds=10), -80.0)
@@ -191,7 +191,7 @@ class TestGetAllDevicesWithLatestWindow:
 
     @pytest.mark.timeout(30)
     def test_returns_devices_with_windows(self, in_memory_engine) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(in_memory_engine) as session:
             device = Device(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap", ssid="Test")
             session.add(device)

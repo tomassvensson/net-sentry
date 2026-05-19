@@ -1,7 +1,7 @@
 """Tests for alert management system."""
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -164,14 +164,13 @@ class TestAlertRules:
     @pytest.mark.timeout(30)
     def test_time_window_rule_fires_in_window(self) -> None:
         """time_window rule should fire an extra alert when the device is seen in window."""
-        from datetime import timezone
         from unittest.mock import patch
 
         rule = AlertRule(rule_type="time_window", start_hour=0, end_hour=6, label="night")
         config = AlertConfig(enabled=True, log_new_devices=False, cooldown_seconds=0, rules=[rule])
         mgr = AlertManager(config)
         # Simulate hour=3 (within 00:00–06:00)
-        fake_now = datetime(2024, 1, 1, 3, 0, 0, tzinfo=timezone.utc)
+        fake_now = datetime(2024, 1, 1, 3, 0, 0, tzinfo=UTC)
         with patch("src.alert.datetime") as mock_dt:
             mock_dt.now.return_value = fake_now
             mgr.on_new_device(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap")
@@ -181,13 +180,12 @@ class TestAlertRules:
     @pytest.mark.timeout(30)
     def test_time_window_rule_silent_outside_window(self) -> None:
         """time_window rule should NOT fire when device is seen outside the window."""
-        from datetime import timezone
         from unittest.mock import patch
 
         rule = AlertRule(rule_type="time_window", start_hour=0, end_hour=6, label="night")
         config = AlertConfig(enabled=True, log_new_devices=False, cooldown_seconds=0, rules=[rule])
         mgr = AlertManager(config)
-        fake_now = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        fake_now = datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC)
         with patch("src.alert.datetime") as mock_dt:
             mock_dt.now.return_value = fake_now
             mgr.on_new_device(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap")
@@ -197,13 +195,12 @@ class TestAlertRules:
     @pytest.mark.timeout(30)
     def test_time_window_rule_device_type_filter_match(self) -> None:
         """time_window rule with device_type_filter fires only for matching type."""
-        from datetime import timezone
         from unittest.mock import patch
 
         rule = AlertRule(rule_type="time_window", start_hour=0, end_hour=6, device_type_filter="bluetooth")
         config = AlertConfig(enabled=True, log_new_devices=False, cooldown_seconds=0, rules=[rule])
         mgr = AlertManager(config)
-        fake_now = datetime(2024, 1, 1, 2, 0, 0, tzinfo=timezone.utc)
+        fake_now = datetime(2024, 1, 1, 2, 0, 0, tzinfo=UTC)
         with patch("src.alert.datetime") as mock_dt:
             mock_dt.now.return_value = fake_now
             mgr.on_new_device(mac_address="AA:BB:CC:DD:EE:FF", device_type="bluetooth")
@@ -211,13 +208,12 @@ class TestAlertRules:
 
     @pytest.mark.timeout(30)
     def test_time_window_rule_device_type_filter_no_match(self) -> None:
-        from datetime import timezone
         from unittest.mock import patch
 
         rule = AlertRule(rule_type="time_window", start_hour=0, end_hour=6, device_type_filter="bluetooth")
         config = AlertConfig(enabled=True, log_new_devices=False, cooldown_seconds=0, rules=[rule])
         mgr = AlertManager(config)
-        fake_now = datetime(2024, 1, 1, 2, 0, 0, tzinfo=timezone.utc)
+        fake_now = datetime(2024, 1, 1, 2, 0, 0, tzinfo=UTC)
         with patch("src.alert.datetime") as mock_dt:
             mock_dt.now.return_value = fake_now
             mgr.on_new_device(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap")
@@ -226,14 +222,13 @@ class TestAlertRules:
     @pytest.mark.timeout(30)
     def test_time_window_rule_wraps_midnight(self) -> None:
         """time_window start_hour > end_hour wraps midnight correctly."""
-        from datetime import timezone
         from unittest.mock import patch
 
         # 22:00–02:00 window
         rule = AlertRule(rule_type="time_window", start_hour=22, end_hour=2, label="late")
         config = AlertConfig(enabled=True, log_new_devices=False, cooldown_seconds=0, rules=[rule])
         mgr = AlertManager(config)
-        fake_now = datetime(2024, 1, 1, 23, 30, 0, tzinfo=timezone.utc)  # 23:30 is in window
+        fake_now = datetime(2024, 1, 1, 23, 30, 0, tzinfo=UTC)  # 23:30 is in window
         with patch("src.alert.datetime") as mock_dt:
             mock_dt.now.return_value = fake_now
             mgr.on_new_device(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap")
@@ -243,24 +238,24 @@ class TestAlertRules:
 
     @pytest.mark.timeout(30)
     def test_disappearance_rule_fires_when_absent(self) -> None:
-        from datetime import timedelta, timezone
+        from datetime import timedelta
 
         rule = AlertRule(rule_type="disappearance", mac_address="AA:BB:CC:DD:EE:FF", threshold_minutes=30)
         config = AlertConfig(enabled=True, cooldown_seconds=0, rules=[rule])
         mgr = AlertManager(config)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         last_seen_by_mac = {"AA:BB:CC:DD:EE:FF": now - timedelta(minutes=45)}
         mgr.check_disappearance(last_seen_by_mac)
         assert mgr.alert_count == 1
 
     @pytest.mark.timeout(30)
     def test_disappearance_rule_silent_when_present(self) -> None:
-        from datetime import timedelta, timezone
+        from datetime import timedelta
 
         rule = AlertRule(rule_type="disappearance", mac_address="AA:BB:CC:DD:EE:FF", threshold_minutes=30)
         config = AlertConfig(enabled=True, cooldown_seconds=0, rules=[rule])
         mgr = AlertManager(config)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         last_seen_by_mac = {"AA:BB:CC:DD:EE:FF": now - timedelta(minutes=10)}
         mgr.check_disappearance(last_seen_by_mac)
         assert mgr.alert_count == 0
@@ -275,12 +270,12 @@ class TestAlertRules:
 
     @pytest.mark.timeout(30)
     def test_disappearance_rule_cooldown(self) -> None:
-        from datetime import timedelta, timezone
+        from datetime import timedelta
 
         rule = AlertRule(rule_type="disappearance", mac_address="AA:BB:CC:DD:EE:FF", threshold_minutes=30)
         config = AlertConfig(enabled=True, cooldown_seconds=300, rules=[rule])
         mgr = AlertManager(config)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         last_seen_by_mac = {"AA:BB:CC:DD:EE:FF": now - timedelta(minutes=45)}
         mgr.check_disappearance(last_seen_by_mac)
         mgr.check_disappearance(last_seen_by_mac)  # second call — still within cooldown

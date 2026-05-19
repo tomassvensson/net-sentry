@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -15,7 +15,7 @@ def _make_neighbor(ipv6: str, mac: str = "AA:BB:CC:DD:EE:FF") -> Ipv6Neighbor:
         mac_address=mac,
         interface="eth0",
         state="REACHABLE",
-        scan_time=datetime.now(timezone.utc),
+        scan_time=datetime.now(UTC),
     )
 
 

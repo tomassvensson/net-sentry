@@ -14,6 +14,7 @@ Every concrete ScannerPlugin subclass must satisfy these invariants:
 """
 
 import re
+from datetime import UTC
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -170,11 +171,10 @@ class TestScanResult:
 
     @pytest.mark.timeout(30)
     def test_scan_time_is_utc_aware(self) -> None:
-        from datetime import timezone
 
         sr = ScanResult(mac_address="aa:bb:cc:dd:ee:ff", device_type="ble", source="test")
         assert sr.scan_time.tzinfo is not None
-        assert sr.scan_time.tzinfo == timezone.utc
+        assert sr.scan_time.tzinfo == UTC
 
 
 # ---------------------------------------------------------------------------

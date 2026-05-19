@@ -10,7 +10,7 @@ preventing log spam when a device flaps on/off.
 
 import logging
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -163,7 +163,7 @@ class AlertManager:
         if not self._config.enabled:
             return
 
-        now_dt = datetime.now(timezone.utc)
+        now_dt = datetime.now(UTC)
 
         if self._is_in_cooldown(mac_address, now_dt):
             return
@@ -209,7 +209,7 @@ class AlertManager:
         if not self._config.enabled or self._config.warn_returning_after_days <= 0:
             return
 
-        now_dt = datetime.now(timezone.utc)
+        now_dt = datetime.now(UTC)
         cooldown_key = f"returning:{mac_address}"
         if self._is_in_cooldown(cooldown_key, now_dt):
             return
@@ -302,7 +302,7 @@ class AlertManager:
         Args:
             last_seen_by_mac: Mapping of MAC address to the datetime it was last seen.
         """
-        now_dt = datetime.now(timezone.utc)
+        now_dt = datetime.now(UTC)
         for rule in self._rules:
             if rule.rule_type != "disappearance" or not rule.mac_address:
                 continue
@@ -334,7 +334,7 @@ class AlertManager:
         if last_seen is None:
             return float("inf")
         if last_seen.tzinfo is None:
-            last_seen = last_seen.replace(tzinfo=timezone.utc)
+            last_seen = last_seen.replace(tzinfo=UTC)
         return (now_dt - last_seen).total_seconds() / 60.0
 
     def _fire_disappearance_alert(self, rule: AlertRule, elapsed_minutes: float) -> None:

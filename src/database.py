@@ -5,7 +5,7 @@ import os
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import Column, Engine, create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -157,7 +157,7 @@ def get_session_factory(engine: Engine) -> sessionmaker:
 
 
 @contextmanager
-def get_session(engine: Engine) -> Generator[Session, None, None]:
+def get_session(engine: Engine) -> Generator[Session]:
     """Context manager for database sessions with automatic commit/rollback.
 
     Args:
@@ -196,7 +196,7 @@ def purge_old_windows(engine: Engine, retention_days: int) -> int:
     if retention_days <= 0:
         return 0
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
     deleted = 0
 
     with engine.begin() as conn:

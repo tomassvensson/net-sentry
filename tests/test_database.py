@@ -1,5 +1,7 @@
 """Tests for database models and session management."""
 
+from datetime import UTC
+
 import pytest
 from sqlalchemy import create_engine, inspect, text
 
@@ -99,9 +101,9 @@ class TestVisibilityWindowModel:
 
     @pytest.mark.timeout(30)
     def test_create_window(self, in_memory_engine) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(in_memory_engine) as session:
             window = VisibilityWindow(
                 mac_address="AA:BB:CC:DD:EE:FF",
@@ -121,9 +123,9 @@ class TestVisibilityWindowModel:
 
     @pytest.mark.timeout(30)
     def test_window_repr(self) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         window = VisibilityWindow(
             mac_address="AA:BB:CC:DD:EE:FF",
             first_seen=now,

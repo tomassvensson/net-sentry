@@ -16,7 +16,7 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.oui_lookup import is_multicast_mac, is_randomized_mac, lookup_vendor, normalize_mac
 
@@ -35,7 +35,7 @@ class NetworkDevice:
     is_randomized: bool = False
     arp_type: str = "dynamic"  # "dynamic" or "static"
     network_segment: str | None = None  # Subnet/VLAN label from ping_sweep config
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:
         """Post-initialization: look up vendor and check for randomization."""

@@ -91,7 +91,7 @@ def _start_server(port: int) -> threading.Thread:
 
 
 @pytest.fixture(scope="session")
-def base_url() -> Generator[str, None, None]:
+def base_url() -> Generator[str]:
     """Start the FastAPI server once per test session and yield the base URL."""
     port = _get_free_port()
     _start_server(port)

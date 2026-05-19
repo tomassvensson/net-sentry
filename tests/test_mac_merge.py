@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -38,7 +38,7 @@ def engine():
 
 
 def _make_device(session, mac: str, device_type: str = "wifi_client", **kwargs) -> Device:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     d = Device(
         mac_address=mac,
         device_type=device_type,
@@ -127,7 +127,7 @@ class TestFindMergeCandidates:
 
     def test_temporal_overlap_downgrades_to_low(self, engine):
         """Temporal overlap downgrades high confidence to low."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(engine) as session:
             rand_dev = _make_device(session, _RAND_MAC, device_name="Phone", vendor="Samsung")
             _make_device(session, _GLOBAL_MAC, device_name="Phone", vendor="Samsung")
@@ -170,7 +170,7 @@ class TestMergeDevice:
 
     def test_merge_moves_windows(self, engine):
         """Visibility windows are re-attributed to the target MAC."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(engine) as session:
             _make_device(session, _RAND_MAC)
             _make_device(session, _GLOBAL_MAC)
@@ -192,7 +192,7 @@ class TestMergeDevice:
 
     def test_merge_dry_run_no_changes(self, engine):
         """Dry-run does not modify the database."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(engine) as session:
             _make_device(session, _RAND_MAC)
             _make_device(session, _GLOBAL_MAC)

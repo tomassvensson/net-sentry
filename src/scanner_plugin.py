@@ -34,7 +34,7 @@ import importlib.metadata
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class ScanResult:
     mac_address: str
     device_type: str
     source: str
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
     signal_dbm: int | None = None
     vendor: str | None = None
     device_name: str | None = None

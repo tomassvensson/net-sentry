@@ -18,7 +18,7 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -130,7 +130,7 @@ def _constant_time_compare(a: str, b: str) -> bool:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """Application lifespan: initialize DB, start background jobs on startup."""
     import asyncio
 
@@ -239,7 +239,7 @@ if _STATIC_DIR.exists():
 _PHOTOS_DIR = _STATIC_DIR / "photos"
 
 
-def get_db() -> Generator[Session, None, None]:
+def get_db() -> Generator[Session]:
     """Dependency: provide a database session."""
     if _engine is None:
         raise RuntimeError("Database not initialized")
@@ -269,7 +269,7 @@ def health_check() -> dict[str, Any]:
     """
     status: dict[str, Any] = {
         "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "version": "0.1.0",
     }
 
@@ -553,7 +553,7 @@ def get_summary(
         type_counts[device_type] = count
 
     # Active windows (seen in last 10 minutes)
-    cutoff = datetime.now(timezone.utc)
+    cutoff = datetime.now(UTC)
     # Use a broad cutoff — we just want recent activity
     active_windows = (
         session.query(func.count(VisibilityWindow.id))
@@ -566,7 +566,7 @@ def get_summary(
         "total_devices": total_devices,
         "device_types": type_counts,
         "active_windows": active_windows,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
 
@@ -603,7 +603,7 @@ def dashboard(request: Request, session: DbSession = None) -> HTMLResponse:  # t
         context={
             "total_devices": total_devices,
             "devices": device_list,
-            "now": datetime.now(timezone.utc),
+            "now": datetime.now(UTC),
         },
     )
 
@@ -649,7 +649,7 @@ def devices_table_fragment(
             "devices": device_list,
             "page": page,
             "pages": pages,
-            "now": datetime.now(timezone.utc),
+            "now": datetime.now(UTC),
         },
     )
 
@@ -696,7 +696,7 @@ def device_detail_page(
             "page": page,
             "pages": pages,
             "total_windows": total_windows,
-            "now": datetime.now(timezone.utc),
+            "now": datetime.now(UTC),
         },
     )
 
@@ -758,7 +758,7 @@ def device_timeline_page(
             "total_windows": len(windows),
             "first_seen": windows[0].first_seen if windows else None,
             "last_seen": windows[-1].last_seen if windows else None,
-            "now": datetime.now(timezone.utc),
+            "now": datetime.now(UTC),
         },
     )
 

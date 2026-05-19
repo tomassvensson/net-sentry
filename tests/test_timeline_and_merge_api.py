@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
@@ -36,7 +36,7 @@ def engine():
 
 @pytest.fixture()
 def client(engine):
-    def _override() -> Generator[Session, None, None]:
+    def _override() -> Generator[Session]:
         with get_session(engine) as session:
             yield session
 
@@ -49,7 +49,7 @@ def client(engine):
 
 
 def _seed(engine, mac: str = _GLOBAL_MAC, windows: int = 3) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with get_session(engine) as session:
         device = Device(
             mac_address=mac,
@@ -121,7 +121,7 @@ class TestTimelineEndpoint:
 
     @pytest.mark.timeout(30)
     def test_empty_entries_for_device_without_windows(self, client, engine):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(engine) as session:
             session.add(
                 Device(
@@ -170,7 +170,7 @@ class TestMergeCandidatesEndpoint:
 
     @pytest.mark.timeout(30)
     def test_randomized_mac_with_candidate(self, client, engine):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(engine) as session:
             session.add(
                 Device(

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.network_discovery import NetworkDevice
@@ -76,7 +76,7 @@ def _parse_ends_timestamp(ts_raw: str) -> datetime | None:
     """Parse an ISC DHCP ``ends`` timestamp string into a UTC datetime."""
     try:
         ts_str = ts_raw.replace("/", "-")  # 2024-01-02 10:00:00
-        return datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
     except ValueError:
         return None
 

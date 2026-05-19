@@ -34,7 +34,7 @@ Use the token::
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from fastapi import Depends, HTTPException, status
@@ -96,7 +96,7 @@ def create_access_token(
     """
     jose_jwt = _load_jose()
     payload = dict(data)
-    expire = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
+    expire = datetime.now(UTC) + timedelta(minutes=expires_minutes)
     payload["exp"] = expire
     return cast("str", jose_jwt.encode(payload, secret, algorithm=algorithm))
 

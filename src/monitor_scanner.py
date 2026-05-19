@@ -15,7 +15,7 @@ The adapter operates in passive receive-only monitor mode.
 import contextlib
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class MonitorModeDevice:
     ssid: str | None = None
     vendor: str | None = None
     channel: int | None = None
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
     probed_ssids: list[str] = field(default_factory=list)
     """All unique SSIDs this device was observed probing for."""
 
@@ -57,7 +57,7 @@ class ProbeRequest:
     mac_address: str
     probed_ssid: str
     signal_dbm: float | None = None
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 def is_scapy_available() -> bool:
@@ -234,7 +234,7 @@ def _capture_frames(
     from scapy.all import sniff
 
     devices: dict[str, MonitorModeDevice] = {}
-    scan_time = datetime.now(timezone.utc)
+    scan_time = datetime.now(UTC)
 
     logger.info(
         "Starting monitor mode capture on %s for %ds (channel_hop=%s)",

@@ -12,7 +12,7 @@ import socket
 import struct
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.oui_lookup import is_randomized_mac, lookup_vendor
 
@@ -73,7 +73,7 @@ class MdnsDevice:
     vendor: str | None = None
     is_randomized: bool = False
     txt_records: dict[str, str] = field(default_factory=dict)
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 def _discover_dynamic_service_types(sock: socket.socket, timeout: float) -> list[str]:

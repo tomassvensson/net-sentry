@@ -9,7 +9,7 @@ import platform
 import re
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.oui_lookup import is_multicast_mac, normalize_mac
 
@@ -24,7 +24,7 @@ class Ipv6Neighbor:
     mac_address: str
     interface: str = ""
     state: str = ""
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __repr__(self) -> str:
         """Return string representation."""
@@ -86,7 +86,7 @@ def _parse_windows_output(output: str) -> list[Ipv6Neighbor]:
     """
     neighbors: list[Ipv6Neighbor] = []
     current_interface = ""
-    scan_time = datetime.now(timezone.utc)
+    scan_time = datetime.now(UTC)
 
     # Match "Interface N: <name>"
     iface_pattern = re.compile(r"^Interface\s+\d+:\s+(.+)$", re.IGNORECASE)
@@ -159,7 +159,7 @@ def _parse_linux_output(output: str) -> list[Ipv6Neighbor]:
         List of Ipv6Neighbor entries.
     """
     neighbors: list[Ipv6Neighbor] = []
-    scan_time = datetime.now(timezone.utc)
+    scan_time = datetime.now(UTC)
 
     pattern = re.compile(
         r"^([\da-fA-F:]+)\s+dev\s+(\S+)\s+lladdr\s+([\da-fA-F:]+)\s+(\S+)",

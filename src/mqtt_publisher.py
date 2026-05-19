@@ -5,7 +5,7 @@ Publishes device discovery and scan events to an MQTT broker.
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ class MqttPublisher:
             "vendor": vendor,
             "device_name": device_name,
             "signal_dbm": signal_dbm,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         try:
@@ -189,7 +189,7 @@ class MqttPublisher:
             "bluetooth_count": bluetooth_count,
             "arp_count": arp_count,
             "total_devices": total_devices,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         try:
