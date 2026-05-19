@@ -337,7 +337,7 @@
             }
         });
         if (signalLabels.length > 0) {
-            new Chart(chartCanvas, {
+            const signalChart = new Chart(chartCanvas, { // NOSONAR — Chart renders to canvas as side effect; ref kept intentionally
                 type: 'line',
                 data: {
                     labels: signalLabels,
