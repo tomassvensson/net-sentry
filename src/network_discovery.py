@@ -434,9 +434,7 @@ def _parse_linux_routing_table() -> list[str]:
     return discovered
 
 
-def _process_windows_route_line(
-    stripped: str, ipv4_section: bool, subnets: set[str]
-) -> bool:
+def _process_windows_route_line(stripped: str, ipv4_section: bool, subnets: set[str]) -> bool:
     """Process one stripped line from ``route print``; returns updated *ipv4_section* flag."""
     if "IPv4 Route Table" in stripped or "Active Routes" in stripped:
         return True

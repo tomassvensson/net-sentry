@@ -763,7 +763,11 @@ def device_timeline_page(
     )
 
 
-@v1.get("/devices/{mac_address}/windows-table", response_class=HTMLResponse, responses={404: {"description": "Device not found"}})
+@v1.get(
+    "/devices/{mac_address}/windows-table",
+    response_class=HTMLResponse,
+    responses={404: {"description": "Device not found"}},
+)
 def windows_table_fragment(
     request: Request,
     mac_address: str,
@@ -1133,9 +1137,7 @@ def _serialize_window(window: VisibilityWindow) -> dict[str, Any]:
     }
 
 
-def _build_timeline_api_entries(
-    windows: list[VisibilityWindow], gap_threshold_seconds: int
-) -> list[dict[str, Any]]:
+def _build_timeline_api_entries(windows: list[VisibilityWindow], gap_threshold_seconds: int) -> list[dict[str, Any]]:
     """Build window and gap entries for the timeline API response.
 
     Args:
