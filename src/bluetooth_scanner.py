@@ -278,7 +278,7 @@ def _parse_ble_discovery_results(discovered_devices: object) -> list[BluetoothDe
     if isinstance(discovered_devices, dict):
         parsed_items = _extract_ble_dict_items(discovered_devices)
     elif isinstance(discovered_devices, list):
-        parsed_items: list[tuple[object, object | None]] = [(device, None) for device in discovered_devices]
+        parsed_items = [(device, None) for device in discovered_devices]
     else:
         return []
 
