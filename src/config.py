@@ -374,7 +374,7 @@ def _write_jwt_secret_to_config(config_path: str, new_secret: str) -> None:
     try:
         resolved = Path(config_path).resolve()
         allowed_base = Path.cwd().resolve()
-        resolved.relative_to(allowed_base)  # raises ValueError if outside cwd
+        rel = resolved.relative_to(allowed_base)  # raises ValueError if outside cwd
     except ValueError:
         logger.warning("Refusing to write JWT secret: config path is outside the working directory: %s", config_path)
         return
@@ -386,10 +386,14 @@ def _write_jwt_secret_to_config(config_path: str, new_secret: str) -> None:
         logger.warning("Refusing to write JWT secret to non-YAML file: %s", config_path)
         return
 
-    if not resolved.exists():
+    # Reconstruct from the validated base so the path is not derived from
+    # user-controlled input (prevents static-analysis false positives).
+    safe_path = allowed_base / rel
+
+    if not safe_path.exists():
         return
     try:
-        content = resolved.read_text(encoding="utf-8")
+        content = safe_path.read_text(encoding="utf-8")
         lines = content.splitlines(keepends=True)
         updated_lines = []
         for line in lines:
@@ -399,7 +403,7 @@ def _write_jwt_secret_to_config(config_path: str, new_secret: str) -> None:
                 updated_lines.append(f'{indent}jwt_secret: "{new_secret}"\n')
             else:
                 updated_lines.append(line)
-        resolved.write_text("".join(updated_lines), encoding="utf-8")
+        safe_path.write_text("".join(updated_lines), encoding="utf-8")
         logger.info("JWT secret written to %s.", config_path)
     except OSError:
         logger.warning("Could not write generated JWT secret to %s (read-only filesystem?).", config_path)
@@ -568,17 +572,6 @@ def _parse_raw_config(raw: dict) -> AppConfig:
             service_types=md.get("service_types", config.mdns.service_types),
         )
 
-    if "monitor_mode" in raw:
-        mm = raw["monitor_mode"]
-        config.monitor_mode = MonitorModeConfig(
-            interface=mm.get("interface", config.monitor_mode.interface),
-            use_docker=mm.get("use_docker", config.monitor_mode.use_docker),
-            docker_image=mm.get("docker_image", config.monitor_mode.docker_image),
-            channel_hop=mm.get("channel_hop", config.monitor_mode.channel_hop),
-            hop_interval_seconds=mm.get("hop_interval_seconds", config.monitor_mode.hop_interval_seconds),
-            capture_duration_seconds=mm.get("capture_duration_seconds", config.monitor_mode.capture_duration_seconds),
-        )
-
     if "api" in raw:
         ap = raw["api"]
         config.api = ApiConfig(
@@ -605,6 +598,13 @@ def _parse_raw_config(raw: dict) -> AppConfig:
             client_id=mq.get("client_id", config.mqtt.client_id),
         )
 
+    _apply_output_settings(raw, config)
+
+    return config
+
+
+def _apply_output_settings(raw: dict, config: AppConfig) -> None:
+    """Apply metrics, logging, tracing, and monitor-mode settings from raw config dict."""
     if "metrics" in raw:
         me = raw["metrics"]
         config.metrics = MetricsConfig(
@@ -622,7 +622,16 @@ def _parse_raw_config(raw: dict) -> AppConfig:
             exporter=tr.get("exporter", config.tracing.exporter),
         )
 
-    return config
+    if "monitor_mode" in raw:
+        mm = raw["monitor_mode"]
+        config.monitor_mode = MonitorModeConfig(
+            interface=mm.get("interface", config.monitor_mode.interface),
+            use_docker=mm.get("use_docker", config.monitor_mode.use_docker),
+            docker_image=mm.get("docker_image", config.monitor_mode.docker_image),
+            channel_hop=mm.get("channel_hop", config.monitor_mode.channel_hop),
+            hop_interval_seconds=mm.get("hop_interval_seconds", config.monitor_mode.hop_interval_seconds),
+            capture_duration_seconds=mm.get("capture_duration_seconds", config.monitor_mode.capture_duration_seconds),
+        )
 
 
 def _env(primary: str, fallback: str) -> str | None:

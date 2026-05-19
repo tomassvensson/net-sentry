@@ -843,7 +843,6 @@ def _process_network_devices(
             gap,
             config=config,
             ha_lookup=ha_lookup or {},
-            rescan_ports=rescan_ports,
         )
         if port_scan_enabled:
             _classify_port_scan_target(arp_dev, device, rescan_ports, port_targets, port_summary)
@@ -858,12 +857,12 @@ def _classify_port_scan_target(
     port_summary: "_PortScanSummary",
 ) -> None:
     """Classify a network device as a port-scan target, cached, or skipped."""
-    if not arp_dev.ip_address:  # type: ignore[union-attr]
+    if not arp_dev.ip_address:  # type: ignore[attr-defined]
         port_summary.skipped_hosts += 1
     elif not rescan_ports and device.open_ports:
         port_summary.cached_hosts += 1
     else:
-        port_targets.append(_PortScanTarget(mac_address=device.mac_address, ip_address=arp_dev.ip_address))  # type: ignore[union-attr]
+        port_targets.append(_PortScanTarget(mac_address=device.mac_address, ip_address=arp_dev.ip_address))  # type: ignore[attr-defined]
 
 
 def _run_port_scan_phase(
@@ -934,7 +933,6 @@ def _upsert_network_device(
     gap_seconds: int,
     config: AppConfig | None = None,
     ha_lookup: dict[str, HaDevice] | None = None,
-    rescan_ports: bool = False,
 ) -> Device:
     """Insert/update a network device from ARP scan.
 
@@ -947,7 +945,6 @@ def _upsert_network_device(
         gap_seconds: Visibility gap threshold.
         config: Application config (for port scan settings).
         ha_lookup: Pre-fetched Home Assistant entity lookup.
-        rescan_ports: Force port re-scan even if cached data exists.
 
     Returns:
         The inserted or updated Device row.
@@ -1287,7 +1284,6 @@ _CATEGORY_RELEVANCE: dict[str, int] = {
 
 def _device_sort_key(
     item: tuple[Device, VisibilityWindow | None],
-    whitelist: WhitelistManager | None,
 ) -> tuple[int, int, int, str]:
     """Sort key: whitelisted first, then category relevance, then named, then MAC."""
     device, _window = item
@@ -1311,7 +1307,7 @@ def _display_results(session: DbSession, whitelist: WhitelistManager | None = No
         print("\nNo devices found.")
         return
 
-    results.sort(key=lambda item: _device_sort_key(item, whitelist))
+    results.sort(key=_device_sort_key)
 
     headers = [
         "Type",

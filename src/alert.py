@@ -315,6 +315,8 @@ class AlertManager:
         now_dt: datetime,
     ) -> None:
         """Evaluate a single disappearance rule and fire alert if threshold exceeded."""
+        if rule.mac_address is None:
+            return
         last_seen = last_seen_by_mac.get(rule.mac_address)
         elapsed_minutes = self._calc_elapsed_minutes(last_seen, now_dt)
         if elapsed_minutes < rule.threshold_minutes:

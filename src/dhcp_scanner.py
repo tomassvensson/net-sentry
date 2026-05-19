@@ -133,16 +133,12 @@ def _parse_lease_text(text: str, *, active_only: bool) -> list[NetworkDevice]:
         record, i = _parse_lease_block(lines, i + 1)
         record["ip_address"] = ip
 
-        if not record["mac_address"]:
-            continue
-        if active_only and record["binding_state"] != "active":
+        if not record["mac_address"] or (active_only and record["binding_state"] != "active"):
             continue
 
         mac = record["mac_address"]
         existing = best.get(mac)
-        if existing is None:
-            best[mac] = record
-        elif record["ends"] and (existing["ends"] is None or record["ends"] > existing["ends"]):
+        if existing is None or (record["ends"] and (existing["ends"] is None or record["ends"] > existing["ends"])):
             best[mac] = record
 
     devices = [

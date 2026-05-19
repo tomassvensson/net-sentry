@@ -19,6 +19,8 @@ from src.oui_lookup import is_randomized_mac, lookup_vendor, normalize_mac
 
 logger = logging.getLogger(__name__)
 
+_HIDDEN_SSID = "<Hidden>"
+
 
 @dataclass
 class WifiNetwork:
@@ -250,7 +252,7 @@ def _build_nmcli_network(values: dict[str, str]) -> WifiNetwork | None:
     authentication, encryption = _split_linux_security(security)
 
     return WifiNetwork(
-        ssid=values.get("SSID", "") or "<Hidden>",
+        ssid=values.get("SSID", "") or _HIDDEN_SSID,
         bssid=normalized_bssid,
         network_type=_normalize_linux_network_type(values.get("MODE", "")),
         authentication=authentication,
@@ -272,6 +274,44 @@ def _parse_iw_interfaces(output: str) -> list[str]:
     return interfaces
 
 
+def _add_security_marker(current: dict[str, object], marker: str) -> None:
+    """Add *marker* to the security_markers set stored in *current*."""
+    markers = current.get("security_markers")
+    if isinstance(markers, set):
+        markers.add(marker)
+
+
+def _parse_iw_line(stripped: str, current: dict[str, object]) -> None:
+    """Update *current* in-place with fields parsed from one `iw scan` line."""
+    if stripped.startswith("SSID:"):
+        current["ssid"] = stripped.split(":", 1)[1].strip() or _HIDDEN_SSID
+        return
+    if stripped.startswith("signal:"):
+        m = re.search(r"(-?\d+(?:\.\d+)?)\s*dBm", stripped)
+        if m:
+            current["signal_dbm"] = float(m.group(1))
+        return
+    channel_match = re.search(r"channel\s+(\d+)", stripped, flags=re.IGNORECASE)
+    if channel_match:
+        current["channel"] = int(channel_match.group(1))
+        return
+    primary_match = re.match(r"^primary channel:\s*(\d+)", stripped, flags=re.IGNORECASE)
+    if primary_match:
+        current["channel"] = int(primary_match.group(1))
+        return
+    if stripped.startswith("freq:"):
+        current["frequency"] = _safe_int(stripped.split(":", 1)[1].strip())
+        return
+    if stripped.startswith("RSN:"):
+        _add_security_marker(current, "WPA2")
+        return
+    if stripped.startswith("WPA:"):
+        _add_security_marker(current, "WPA")
+        return
+    if stripped.startswith("capability:") and "privacy" in stripped.lower():
+        current["privacy"] = True
+
+
 def _parse_iw_output(output: str) -> list[WifiNetwork]:
     """Parse `iw dev <iface> scan` output."""
     networks: list[WifiNetwork] = []
@@ -287,7 +327,7 @@ def _parse_iw_output(output: str) -> list[WifiNetwork]:
                     networks.append(network)
             current = {
                 "bssid": bss_match.group(1),
-                "ssid": "<Hidden>",
+                "ssid": _HIDDEN_SSID,
                 "signal_dbm": None,
                 "channel": 0,
                 "frequency": 0,
@@ -299,44 +339,7 @@ def _parse_iw_output(output: str) -> list[WifiNetwork]:
         if current is None:
             continue
 
-        if stripped.startswith("SSID:"):
-            current["ssid"] = stripped.split(":", 1)[1].strip() or "<Hidden>"
-            continue
-
-        if stripped.startswith("signal:"):
-            signal_match = re.search(r"(-?\d+(?:\.\d+)?)\s*dBm", stripped)
-            if signal_match:
-                current["signal_dbm"] = float(signal_match.group(1))
-            continue
-
-        channel_match = re.search(r"channel\s+(\d+)", stripped, flags=re.IGNORECASE)
-        if channel_match:
-            current["channel"] = int(channel_match.group(1))
-            continue
-
-        primary_match = re.match(r"^primary channel:\s*(\d+)", stripped, flags=re.IGNORECASE)
-        if primary_match:
-            current["channel"] = int(primary_match.group(1))
-            continue
-
-        if stripped.startswith("freq:"):
-            current["frequency"] = _safe_int(stripped.split(":", 1)[1].strip())
-            continue
-
-        if stripped.startswith("RSN:"):
-            security_markers = current["security_markers"]
-            if isinstance(security_markers, set):
-                security_markers.add("WPA2")
-            continue
-
-        if stripped.startswith("WPA:"):
-            security_markers = current["security_markers"]
-            if isinstance(security_markers, set):
-                security_markers.add("WPA")
-            continue
-
-        if stripped.startswith("capability:") and "privacy" in stripped.lower():
-            current["privacy"] = True
+        _parse_iw_line(stripped, current)
 
     if current:
         network = _build_iw_network(current)
@@ -374,7 +377,7 @@ def _build_iw_network(values: dict[str, object]) -> WifiNetwork | None:
     authentication, encryption = _split_linux_security(security)
 
     return WifiNetwork(
-        ssid=str(values.get("ssid") or "") if isinstance(values.get("ssid"), str) else "<Hidden>",
+        ssid=str(values.get("ssid") or "") if isinstance(values.get("ssid"), str) else _HIDDEN_SSID,
         bssid=normalized_bssid,
         network_type="Infrastructure",
         authentication=authentication,
@@ -563,7 +566,7 @@ def _parse_bssid_entry(
         return None
 
     return WifiNetwork(
-        ssid=ssid or "<Hidden>",
+        ssid=ssid or _HIDDEN_SSID,
         bssid=normalized_bssid,
         network_type=network_type,
         authentication=auth,

@@ -60,7 +60,7 @@
         }
         .card h2 { font-size: 1rem; margin-bottom: 1rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
         .meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.8rem; }
-        .meta-item label { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; display: block; margin-bottom: 0.2rem; }
+        .meta-item label, .meta-item .meta-label { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; display: block; margin-bottom: 0.2rem; }
         .meta-item span { font-size: 0.9rem; font-family: monospace; }
         .theme-btn { cursor: pointer; background: none; border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 0.3rem 0.7rem; font-size: 0.8rem; }
         .gap-controls { display: flex; align-items: center; gap: 0.8rem; margin-bottom: 1rem; font-size: 0.85rem; }
@@ -162,22 +162,22 @@
         <h2>Summary</h2>
         <div class="meta-grid">
             <div class="meta-item">
-                <label>MAC Address</label>
+                <span class="meta-label">MAC Address</span>
                 <span>{{ device.mac_address }}</span>
             </div>
             <div class="meta-item">
-                <label>Total Windows</label>
+                <span class="meta-label">Total Windows</span>
                 <span>{{ total_windows }}</span>
             </div>
             {% if first_seen %}
             <div class="meta-item">
-                <label>First Seen</label>
+                <span class="meta-label">First Seen</span>
                 <span>{{ first_seen.strftime('%Y-%m-%d %H:%M') }}</span>
             </div>
             {% endif %}
             {% if last_seen %}
             <div class="meta-item">
-                <label>Last Seen</label>
+                <span class="meta-label">Last Seen</span>
                 <span>{{ last_seen.strftime('%Y-%m-%d %H:%M') }}</span>
             </div>
             {% endif %}
@@ -278,7 +278,9 @@
     {% endif %}
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"
+        integrity="sha384-b0GXujLkk9eYYSmcSfoyZbfyElGAQnDyY0skCHSG6w3JgTMFnz11ggrTAr7seu9f"
+        crossorigin="anonymous"></script>
 <script>
 (function () {
     // Make timeline bars proportional in width to their duration
@@ -287,8 +289,8 @@
 
     var starts = [], ends = [];
     entries.forEach(function (el) {
-        starts.push(parseFloat(el.dataset.start));
-        ends.push(parseFloat(el.dataset.end));
+        starts.push(Number.parseFloat(el.dataset.start));
+        ends.push(Number.parseFloat(el.dataset.end));
     });
     var minT = Math.min.apply(null, starts);
     var maxT = Math.max.apply(null, ends);
@@ -298,8 +300,8 @@
     var summaryBar = document.getElementById('summary-bar');
     var prev = minT;
     entries.forEach(function (el) {
-        var s = parseFloat(el.dataset.start);
-        var e = parseFloat(el.dataset.end);
+        var s = Number.parseFloat(el.dataset.start);
+        var e = Number.parseFloat(el.dataset.end);
         // gap before this entry
         if (s > prev) {
             var seg = document.createElement('div');
@@ -323,19 +325,19 @@
         var signalData = [];
         entries.forEach(function (el) {
             if (el.dataset.type !== 'window') return;
-            var start = parseFloat(el.dataset.start);
+            var start = Number.parseFloat(el.dataset.start);
             var dateLabel = new Date(start * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
             var dbm = el.querySelector('.tl-signal');
             if (dbm) {
-                var val = parseFloat(dbm.textContent);
-                if (!isNaN(val)) {
+                var val = Number.parseFloat(dbm.textContent);
+                if (!Number.isNaN(val)) {
                     signalLabels.push(dateLabel);
                     signalData.push(val);
                 }
             }
         });
         if (signalLabels.length > 0) {
-            new Chart(chartCanvas, {
+            const _chart = new Chart(chartCanvas, {
                 type: 'line',
                 data: {
                     labels: signalLabels,

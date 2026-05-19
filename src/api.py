@@ -313,7 +313,7 @@ def list_devices(
     page_size: Annotated[int, Query(ge=1, le=200, description="Items per page")] = 50,
     device_type: Annotated[str | None, Query(description="Filter by device type")] = None,
     session: DbSession = None,  # type: ignore[assignment]
-    _user: AuthUser = None,  # type: ignore[assignment]
+    _user: AuthUser = None,
 ) -> dict[str, Any]:
     """List all known devices with pagination.
 
@@ -349,7 +349,7 @@ def get_device(
     request: Request,
     mac_address: str,
     session: DbSession = None,  # type: ignore[assignment]
-    _user: AuthUser = None,  # type: ignore[assignment]
+    _user: AuthUser = None,
 ) -> dict[str, Any]:
     """Get device details by MAC address.
 
@@ -385,7 +385,7 @@ def get_device_windows(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
     session: DbSession = None,  # type: ignore[assignment]
-    _user: AuthUser = None,  # type: ignore[assignment]
+    _user: AuthUser = None,
 ) -> dict[str, Any]:
     """Get visibility windows for a device.
 
@@ -419,7 +419,7 @@ def get_device_windows(
 # ---------------------------------------------------------------------------
 
 
-@v1.patch("/devices/{mac_address}/notes")
+@v1.patch("/devices/{mac_address}/notes", responses={404: {"description": "Device not found"}})
 @limiter.limit("60/minute")
 def update_device_notes(
     request: Request,
@@ -427,7 +427,7 @@ def update_device_notes(
     label: Annotated[str | None, Form()] = None,
     notes: Annotated[str | None, Form()] = None,
     session: DbSession = None,  # type: ignore[assignment]
-    _user: AuthUser = None,  # type: ignore[assignment]
+    _user: AuthUser = None,
 ) -> dict[str, Any]:
     """Update the operator label and notes for a device.
 
@@ -456,14 +456,21 @@ _ALLOWED_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 _MAX_PHOTO_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
-@v1.post("/devices/{mac_address}/photo")
+@v1.post(
+    "/devices/{mac_address}/photo",
+    responses={
+        404: {"description": "Device not found"},
+        413: {"description": "Photo exceeds size limit"},
+        415: {"description": "Unsupported file type"},
+    },
+)
 @limiter.limit("20/minute")
 async def upload_device_photo(
     request: Request,
     mac_address: str,
     photo: Annotated[UploadFile, File()],
     session: DbSession = None,  # type: ignore[assignment]
-    _user: AuthUser = None,  # type: ignore[assignment]
+    _user: AuthUser = None,
 ) -> dict[str, Any]:
     """Upload an optional photo for a device.
 
@@ -526,7 +533,7 @@ async def upload_device_photo(
 def get_summary(
     request: Request,
     session: DbSession = None,  # type: ignore[assignment]
-    _user: AuthUser = None,  # type: ignore[assignment]
+    _user: AuthUser = None,
 ) -> dict[str, Any]:
     """Get an overview of the device database.
 
@@ -797,7 +804,7 @@ def windows_table_fragment(
 # ---------------------------------------------------------------------------
 # Auth endpoints
 # ---------------------------------------------------------------------------
-@v1.post("/auth/token")
+@v1.post("/auth/token", responses={401: {"description": "Incorrect username or password"}})
 @limiter.limit("5/minute")  # Tight limit to mitigate brute-force attacks
 def login(
     request: Request,
@@ -880,7 +887,7 @@ _WINDOW_CSV_FIELDS = [
 def export_devices_csv(
     request: Request,
     session: DbSession = None,  # type: ignore[assignment]
-    _user: AuthUser = None,  # type: ignore[assignment]
+    _user: AuthUser = None,
 ) -> StreamingResponse:
     """Export all devices as CSV.
 
@@ -911,7 +918,7 @@ def export_devices_csv(
 def export_devices_json(
     request: Request,
     session: DbSession = None,  # type: ignore[assignment]
-    _user: AuthUser = None,  # type: ignore[assignment]
+    _user: AuthUser = None,
 ) -> StreamingResponse:
     """Export all devices as JSON.
 
@@ -939,7 +946,7 @@ def export_windows_csv(
     request: Request,
     mac_address: Annotated[str | None, Query(description="Filter by MAC address")] = None,
     session: DbSession = None,  # type: ignore[assignment]
-    _user: AuthUser = None,  # type: ignore[assignment]
+    _user: AuthUser = None,
 ) -> StreamingResponse:
     """Export visibility windows as CSV.
 
@@ -973,7 +980,7 @@ def export_windows_csv(
 # ---------------------------------------------------------------------------
 # Timeline endpoint
 # ---------------------------------------------------------------------------
-@v1.get("/devices/{mac_address}/timeline")
+@v1.get("/devices/{mac_address}/timeline", responses={404: {"description": "Device not found"}})
 @limiter.limit("100/minute")
 def get_device_timeline(
     request: Request,
@@ -987,7 +994,7 @@ def get_device_timeline(
         ),
     ] = 60,
     session: DbSession = None,  # type: ignore[assignment]
-    _user: AuthUser = None,  # type: ignore[assignment]
+    _user: AuthUser = None,
 ) -> dict[str, Any]:
     """Return all visibility windows for a device in chronological order.
 
@@ -1036,13 +1043,13 @@ def get_device_timeline(
 # ---------------------------------------------------------------------------
 # Randomized-MAC merge candidates endpoint
 # ---------------------------------------------------------------------------
-@v1.get("/devices/{mac_address}/merge-candidates")
+@v1.get("/devices/{mac_address}/merge-candidates", responses={404: {"description": "Device not found"}})
 @limiter.limit("30/minute")
 def get_merge_candidates(
     request: Request,
     mac_address: str,
     session: DbSession = None,  # type: ignore[assignment]
-    _user: AuthUser = None,  # type: ignore[assignment]
+    _user: AuthUser = None,
 ) -> dict[str, Any]:
     """Find canonical devices that *mac_address* (a randomized MAC) may belong to.
 

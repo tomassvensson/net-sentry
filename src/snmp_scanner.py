@@ -26,6 +26,7 @@ Typical keys:
 - oids: standard System MIB OIDs (optional override)
 """
 
+import asyncio
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -115,12 +116,13 @@ async def _snmp_get_async(
     )
 
     engine = SnmpEngine()
-    transport = UdpTransportTarget((ip_address, port), timeout=timeout, retries=retries)
+    transport = UdpTransportTarget((ip_address, port), retries=retries)
     auth = CommunityData(community, mpModel=1)  # mpModel=1 → SNMPv2c
 
-    error_indication, error_status, error_index, result = await getCmd(
-        engine, auth, transport, ContextData(), *var_binds
-    )
+    async with asyncio.timeout(timeout):  # type: ignore[attr-defined]  # asyncio.timeout requires Python 3.11+
+        error_indication, error_status, error_index, result = await getCmd(
+            engine, auth, transport, ContextData(), *var_binds
+        )
 
     if error_indication:
         logger.debug("SNMP error for %s: %s", ip_address, error_indication)
@@ -166,8 +168,6 @@ def query_snmp_device(
         :class:`SnmpDeviceInfo` on success, ``None`` if unreachable or
         SNMP not supported.
     """
-    import asyncio  # noqa: PLC0415
-
     try:
         from pysnmp.hlapi.asyncio import ObjectIdentity, ObjectType  # noqa: PLC0415
     except ImportError:

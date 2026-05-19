@@ -216,12 +216,12 @@ def _run_ble_discovery(timeout_seconds: float, scanning_mode: Literal["active", 
         return asyncio.run(_discover_ble_devices(timeout_seconds, scanning_mode=scanning_mode))
 
     result: list[Any] = []
-    error: list[BaseException] = []
+    error: list[Exception] = []
 
     def _runner() -> None:
         try:
             result.extend(asyncio.run(_discover_ble_devices(timeout_seconds, scanning_mode=scanning_mode)))
-        except BaseException as exc:  # pragma: no cover - bubbled immediately below
+        except Exception as exc:  # pragma: no cover - bubbled immediately below
             error.append(exc)
 
     worker = threading.Thread(target=_runner, daemon=True)

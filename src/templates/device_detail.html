@@ -187,7 +187,7 @@
         <div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:flex-start;">
             {% if device.photo_path %}
             <div>
-                <img src="{{ device.photo_path }}" alt="Device photo"
+                <img src="{{ device.photo_path }}" alt="Device image"
                      style="max-width:160px;max-height:160px;border-radius:6px;border:1px solid var(--border);">
             </div>
             {% endif %}
@@ -250,13 +250,13 @@
 <script>
     const _THEME_KEY = 'net-sentry-theme';
     function toggleTheme() {
-        const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-        document.documentElement.setAttribute('data-theme', next);
+        const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        document.documentElement.dataset.theme = next;
         localStorage.setItem(_THEME_KEY, next);
     }
     // Restore saved theme on page load (G: dark-mode persistence)
     const _savedTheme = localStorage.getItem(_THEME_KEY);
-    if (_savedTheme) document.documentElement.setAttribute('data-theme', _savedTheme);
+    if (_savedTheme) document.documentElement.dataset.theme = _savedTheme;
     // Wire the toggle button to use localStorage
     document.addEventListener('DOMContentLoaded', function() {
         const btn = document.querySelector('.theme-btn');
@@ -277,7 +277,7 @@
                     const resp = await fetch('/api/v1/devices/' + encodeURIComponent(mac) + '/notes', {method: 'PATCH', body: fd});
                     if (resp.ok) { status.textContent = 'Saved.'; status.style.color = 'var(--success)'; }
                     else { const j = await resp.json(); status.textContent = 'Error: ' + (j.detail || resp.status); status.style.color = 'var(--accent)'; }
-                } catch(e) { status.textContent = 'Network error.'; status.style.color = 'var(--accent)'; }
+                } catch(e) { console.error(e); status.textContent = 'Network error.'; status.style.color = 'var(--accent)'; }
                 setTimeout(() => { status.textContent = ''; }, 3000);
             });
         }
@@ -296,7 +296,7 @@
                     const resp = await fetch('/api/v1/devices/' + encodeURIComponent(mac) + '/photo', {method: 'POST', body: fd});
                     if (resp.ok) { status.textContent = 'Uploaded — reload to see photo.'; status.style.color = 'var(--success)'; }
                     else { const j = await resp.json(); status.textContent = 'Error: ' + (j.detail || resp.status); status.style.color = 'var(--accent)'; }
-                } catch(e) { status.textContent = 'Network error.'; status.style.color = 'var(--accent)'; }
+                } catch(e) { console.error(e); status.textContent = 'Network error.'; status.style.color = 'var(--accent)'; }
                 setTimeout(() => { status.textContent = ''; }, 4000);
             });
         }
