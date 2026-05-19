@@ -404,7 +404,7 @@ def _write_jwt_secret_to_config(config_path: str, new_secret: str) -> None:
                 updated_lines.append(f'{indent}jwt_secret: "{new_secret}"\n')
             else:
                 updated_lines.append(line)
-        safe_path.write_text("".join(updated_lines), encoding="utf-8")
+        safe_path.write_text("".join(updated_lines), encoding="utf-8")  # NOSONAR — cwd-bounded, suffix-checked
         logger.info("JWT secret written to %s.", config_path)
     except OSError:
         logger.warning("Could not write generated JWT secret to %s (read-only filesystem?).", config_path)

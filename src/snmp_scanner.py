@@ -102,7 +102,6 @@ async def _snmp_get_async(
     ip_address: str,
     community: str,
     port: int,
-    timeout: int,
     retries: int,
     var_binds: list[Any],
 ) -> "SnmpDeviceInfo | None":
@@ -119,10 +118,9 @@ async def _snmp_get_async(
     transport = UdpTransportTarget((ip_address, port), retries=retries)
     auth = CommunityData(community, mpModel=1)  # mpModel=1 → SNMPv2c
 
-    async with asyncio.timeout(timeout):
-        error_indication, error_status, error_index, result = await getCmd(
-            engine, auth, transport, ContextData(), *var_binds
-        )
+    error_indication, error_status, error_index, result = await getCmd(
+        engine, auth, transport, ContextData(), *var_binds
+    )
 
     if error_indication:
         logger.debug("SNMP error for %s: %s", ip_address, error_indication)
@@ -177,7 +175,8 @@ def query_snmp_device(
     var_binds: list[Any] = [ObjectType(ObjectIdentity(oid)) for oid in oids]
 
     async def _coro() -> SnmpDeviceInfo | None:
-        return await _snmp_get_async(ip_address, community, port, timeout, retries, var_binds)
+        async with asyncio.timeout(timeout):
+            return await _snmp_get_async(ip_address, community, port, retries, var_binds)
 
     try:
         asyncio.get_running_loop()

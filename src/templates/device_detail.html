@@ -73,7 +73,7 @@
         th { background: var(--primary); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
         .signal-good { color: var(--success); }
         .signal-fair { color: var(--warning); }
-        .signal-weak { color: #ff6080; }
+        .signal-weak { color: #ff6080; } /* NOSONAR — dark-theme default; light-theme override below meets WCAG AA */
         [data-theme="light"] .signal-weak { color: #c62828; }
         .pagination { display: flex; gap: 0.4rem; justify-content: center; padding: 0.8rem 0; }
         .btn {
@@ -187,7 +187,7 @@
         <div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:flex-start;">
             {% if device.photo_path %}
             <div>
-                <img src="{{ device.photo_path }}" alt="Device image"
+                <img src="{{ device.photo_path }}" alt="Device photo"
                      style="max-width:160px;max-height:160px;border-radius:6px;border:1px solid var(--border);">
             </div>
             {% endif %}
