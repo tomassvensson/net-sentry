@@ -30,7 +30,7 @@ import asyncio
 import logging
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from ipaddress import IPv4Network
 from typing import Any
 
@@ -63,7 +63,7 @@ class SnmpDeviceInfo:
     sys_name: str = ""
     sys_contact: str = ""
     sys_location: str = ""
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
     raw: dict[str, str] = field(default_factory=dict)
 
 
@@ -119,7 +119,7 @@ async def _snmp_get_async(
     transport = UdpTransportTarget((ip_address, port), retries=retries)
     auth = CommunityData(community, mpModel=1)  # mpModel=1 → SNMPv2c
 
-    async with asyncio.timeout(timeout):  # type: ignore[attr-defined]  # asyncio.timeout requires Python 3.11+
+    async with asyncio.timeout(timeout):
         error_indication, error_status, error_index, result = await getCmd(
             engine, auth, transport, ContextData(), *var_binds
         )

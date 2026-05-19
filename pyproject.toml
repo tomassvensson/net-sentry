@@ -2,7 +2,7 @@
 name = "net-sentry"
 version = "0.1.0"
 description = "Net Sentry — Track WiFi, Bluetooth, and network device visibility over time"
-requires-python = ">=3.10"
+requires-python = ">= 3.13"
 readme = "README.md"
 license = {text = "MIT"}
 
@@ -86,7 +86,7 @@ markers = [
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH"]
@@ -95,7 +95,7 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH"]
 "src/api.py" = ["B008"]  # FastAPI Depends() in default args is standard pattern
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.13"
 # Incremental approach to strict mode — enable individual checks rather than strict = true
 # until all type errors across third-party stubs are resolved.
 warn_return_any = true

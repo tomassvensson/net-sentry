@@ -16,8 +16,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import TypeVar
+from datetime import UTC, datetime
 
 from sqlalchemy import Engine, func
 from sqlalchemy.orm import Session as DbSession
@@ -598,10 +597,7 @@ def _subnets_safe_for_forced_host_discovery(subnets: list[str], max_hosts: int =
     return safe_subnets
 
 
-_T = TypeVar("_T")
-
-
-def _run_scanner_with_trace_context(name: str, scanner_fn: Callable[[], list[_T]]) -> list[_T]:
+def _run_scanner_with_trace_context[T](name: str, scanner_fn: Callable[[], list[T]]) -> list[T]:
     """Run a scanner in a thread pool while preserving the parent trace context.
 
     Captures the OpenTelemetry context from the calling thread and attaches
@@ -628,7 +624,7 @@ def _run_scanner_with_trace_context(name: str, scanner_fn: Callable[[], list[_T]
         return _run_scanner(name, scanner_fn)
 
 
-def _run_scanner(name: str, scanner_fn: Callable[[], list[_T]]) -> list[_T]:
+def _run_scanner[T](name: str, scanner_fn: Callable[[], list[T]]) -> list[T]:
     """Execute a scanner function with error handling and per-scanner metrics.
 
     Args:
@@ -898,7 +894,7 @@ def _alert_new_tracked_devices(
         alert_mgr: Alert manager.
     """
     warn_after_days = alert_mgr._config.warn_returning_after_days
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for device, _window, previous_last_seen in tracked_results:
         is_new_device = device.created_at == device.updated_at
         if is_new_device:
@@ -913,7 +909,7 @@ def _alert_new_tracked_devices(
             # Device already known — check if it was absent for more than warn_after_days
             last_seen_aware = previous_last_seen
             if last_seen_aware.tzinfo is None:
-                last_seen_aware = last_seen_aware.replace(tzinfo=timezone.utc)
+                last_seen_aware = last_seen_aware.replace(tzinfo=UTC)
             days_absent = (now - last_seen_aware).total_seconds() / 86400.0
             if days_absent >= warn_after_days:
                 alert_mgr.on_returning_device(
