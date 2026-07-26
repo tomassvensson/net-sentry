@@ -168,12 +168,17 @@ jobs:
   sonarcloud:
     needs: test
     runs-on: ubuntu-latest
-    if: github.actor != 'dependabot[bot]'
+    if: ${{ github.actor != 'dependabot[bot]' && vars.SONAR_ENABLED == 'true' }}
     permissions:
       contents: read
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
+      - name: Require configured SonarCloud token
+        if: env.SONAR_TOKEN == ''
+        run: |
+          echo "::error::SONAR_ENABLED is true but SONAR_TOKEN is not configured"
+          exit 1
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -182,7 +187,6 @@ jobs:
         with:
           name: coverage-report
       - name: SonarCloud Scan
-        if: env.SONAR_TOKEN != ''
         uses: SonarSource/sonarqube-scan-action@v8
         with:
           args: >
@@ -285,3 +289,5 @@ jobs:
           target: "http://localhost:8000"
           rules_file_name: ""
           cmd_options: "-I"
+          fail_action: true
+          allow_issue_writing: false

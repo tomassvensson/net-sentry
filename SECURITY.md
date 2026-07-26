@@ -61,7 +61,8 @@ The following are **out of scope**:
   consumed by CI and the production image without re-resolution.
 - **Container scanning:** Trivy Docker image scan in CI.
 - **DAST:** OWASP ZAP baseline scan against the running API in CI.
-- **Code scanning:** GitHub CodeQL analysis on every push.
+- **Code scanning:** GitHub's default CodeQL setup analyzes the default branch
+  and pull requests without a competing advanced workflow.
 - **Authentication:** API, dashboard, media, metrics, and API docs share one
   bearer/cookie JWT policy. Authenticated startup rejects weak secrets, users,
   wildcard hosts, and wildcard CORS.

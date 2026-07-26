@@ -1,7 +1,6 @@
 # Net Sentry — Network Device Visibility Tracker
 
 [![CI](https://github.com/tomassvensson/net-sentry/actions/workflows/ci.yml/badge.svg)](https://github.com/tomassvensson/net-sentry/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/tomassvensson/net-sentry/actions/workflows/codeql.yml/badge.svg)](https://github.com/tomassvensson/net-sentry/actions/workflows/codeql.yml)
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=tomassvensson_btwf&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=tomassvensson_btwf)
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=tomassvensson_btwf&metric=coverage)](https://sonarcloud.io/summary/new_code?id=tomassvensson_btwf)
 
@@ -372,11 +371,13 @@ docker compose --profile sonarqube up
 
 # Run analysis from host (requires sonar-scanner CLI):
 sonar-scanner
-
-# Or use the CI GitHub Action which runs SonarCloud automatically
 ```
 
-The project is configured with `sonar-project.properties` for static analysis. Check quality gate status with:
+The project is configured with `sonar-project.properties` for static analysis.
+The optional CI scan runs only when the repository variable
+`SONAR_ENABLED=true` and a valid `SONAR_TOKEN` secret are both configured, so
+expired third-party credentials cannot block the required project-owned gates.
+Check local quality gate status with:
 
 ```bash
 python scripts/check_sonarqube.py --url http://localhost:9000 --project tomassvensson_btwf --token <your-token>
