@@ -2,7 +2,7 @@
   "ci": {
     "collect": {
       "url": ["http://localhost:8000/"],
-      "startServerCommand": "uvicorn src.api:app --host 0.0.0.0 --port 8000",
+      "startServerCommand": "uv run --locked --extra dev uvicorn src.api:app --host 0.0.0.0 --port 8000",
       "startServerReadyPattern": "Application startup complete",
       "numberOfRuns": 1
     },
