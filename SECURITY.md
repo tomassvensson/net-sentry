@@ -14,7 +14,7 @@ Only the latest release on the `main` branch receives security fixes.
 **Please do not report security vulnerabilities through public GitHub issues.**
 
 To report a security vulnerability, open a
-[GitHub Security Advisory](https://github.com/tomassvensson/btwf/security/advisories/new)
+[GitHub Security Advisory](https://github.com/tomassvensson/net-sentry/security/advisories/new)
 (click *"Report a vulnerability"* on the *Security* tab of the repository).
 
 Include as much detail as possible:
@@ -55,17 +55,32 @@ The following are **out of scope**:
 
 ## Security Measures in Place
 
-- **SAST:** Bandit runs on every push via GitHub Actions.
-- **Dependency scanning:** Dependabot + Trivy + OWASP Dependency-Check.
+- **SAST:** Medium/high Bandit findings fail CI.
+- **Dependency scanning:** Dependabot, blocking `pip-audit`, and Trivy.
+- **Reproducible dependencies:** A universal `uv.lock` is checked in CI and
+  consumed by CI and the production image without re-resolution.
 - **Container scanning:** Trivy Docker image scan in CI.
 - **DAST:** OWASP ZAP baseline scan against the running API in CI.
 - **Code scanning:** GitHub CodeQL analysis on every push.
-- **HTTP security headers:** `X-Frame-Options`, `X-Content-Type-Options`,
-  `Content-Security-Policy`, `X-XSS-Protection`, and `Referrer-Policy`
-  are set by `SecurityHeadersMiddleware` in `src/api.py`.
+- **Authentication:** API, dashboard, media, metrics, and API docs share one
+  bearer/cookie JWT policy. Authenticated startup rejects weak secrets, users,
+  wildcard hosts, and wildcard CORS.
+- **Browser security:** CSRF checks, login-origin validation, HttpOnly
+  same-site cookies, trusted-host validation, and nonce-based CSP.
+- **HTTP security headers:** frame denial, MIME sniffing protection, CSP,
+  HSTS on HTTPS, referrer/permissions policy, COOP, and CORP are centralized.
+- **Container isolation:** The application is non-root/read-only with no Linux
+  capabilities; the non-root Caddy edge keeps only `NET_BIND_SERVICE`.
+- **Production edge:** The tested Compose profile provides automatic HTTPS,
+  file-backed credentials, exact hosts/origins, and CIDR-scoped forwarded
+  header trust.
 - **Rate limiting:** API endpoints are rate-limited via `slowapi`.
 - **Static analysis:** `ruff` and `mypy` run on every push.
 - **Pre-commit hooks:** `ruff`, `mypy`, and `bandit` run before each commit.
+
+For the threat model, resolved findings, verification contract, and explicitly
+accepted residual risks, see
+[docs/production-readiness.md](docs/production-readiness.md).
 
 ## Preferred Languages
 

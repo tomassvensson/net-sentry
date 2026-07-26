@@ -10,37 +10,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- JWT authentication enabled by default in `config.yaml.example` (`auth_enabled: true`).
-- Tightened rate limit on `POST /api/v1/auth/token` to 5 requests/minute to mitigate brute-force.
-- CSRF protection middleware (double-submit cookie pattern) for HTMX dashboard POSTs.
-- Auto-generation of JWT secret key when the config still contains the placeholder value.
-- Correlation-ID middleware: every HTTP response now carries `X-Request-ID` and the ID is injected into structured logs.
-- `fingerprint_confidence` column on `Device` model; surfaced as a badge in the device detail UI.
-- `mdns.service_types` config list — restrict which mDNS service types are queried.
-- Webhook alert dispatcher (`WebhookDispatcher`) in `src/alert.py`, compatible with Slack and PagerDuty.
-- Chart.js sparkline on the device timeline page to visualise signal-strength over time.
-- `src/dhcp_scanner.py` — import device/hostname info from ISC DHCP lease files (`/var/lib/dhcp/dhcpd.leases`).
-- IPv6 privacy-address de-duplication heuristic in `src/ipv6_scanner.py`.
-- Parallel scanner execution via `ThreadPoolExecutor` in `src/main.py`.
-- Bulk ARP device upserts using `INSERT … ON CONFLICT DO UPDATE` in `src/device_tracker.py`.
-- OpenTelemetry trace-context propagation to scanner calls in `src/main.py`.
-- `opentelemetry-exporter-otlp-proto-grpc` as optional `[observability]` extra in `pyproject.toml`.
-- ADR 003 documenting the OpenTelemetry optional-dependency design decision.
-- SQLite WAL journal mode (`PRAGMA journal_mode=WAL`) enabled on database init.
-- LRU cache (`functools.lru_cache`) on OUI prefix lookups for faster repeated MAC-to-vendor resolution.
-- `asyncio_mode = "strict"` enforcement via session-scoped conftest fixture.
-- Molecule test scenario for the Ansible role (docker driver, Debian Bookworm).
-- `CHANGELOG.md` (this file) and PyPI publish trigger on GitHub Release events.
-- `[observability]` optional extra documented in `README.md`.
+- Browser login/logout with HttpOnly same-site session cookies.
+- Cross-cutting security regression coverage for auth, CSRF, CORS, CSP,
+  trusted hosts, protected docs/metrics, and uploads.
+- Packaged Alembic environment and isolated wheel-install smoke test.
+- Production-readiness review with threat model, resolved findings, residual
+  risks, and verification contract.
+- Hard ping-sweep target limits and lazy bounded SNMP subnet iteration.
+- Configurable data directory for authenticated device photos.
+- Universal cross-platform `uv.lock` plus a lock-enforced multi-stage runtime
+  image and CI installation path.
+- Production Caddy Compose profile with automatic HTTPS, isolated proxy
+  networking, file-backed authentication secrets, and end-to-end coverage.
 
 ### Changed
-- `config.yaml.example`: `api.auth_enabled` default changed from `false` to `true`.
-- `POST /api/v1/auth/token` rate limit tightened from 10/minute to 5/minute.
+- Safe listener default changed to `127.0.0.1`; non-local exposure must be
+  explicit and pass configuration validation.
+- Authenticated startup now requires strong JWT secrets, bcrypt cost 10+,
+  active users, exact CORS origins, and trusted hosts.
+- Replaced `python-jose` with PyJWT to remove the unmaintained `ecdsa`
+  dependency, and raised vulnerable HTTP/parser dependency minimums.
+- Aligned package and requirements metadata for core OpenTelemetry support,
+  upgraded its FastAPI instrumentation, and moved tests to `httpx2`.
+- Dashboard and timeline no longer execute third-party CDN JavaScript.
+- Main UI CSP now uses per-request script nonces.
+- Docker runs non-root/read-only with all capabilities dropped and localhost
+  port publishing by default.
+- Production Caddy runs non-root/read-only and retains only the bind-service
+  capability required by its pinned official binary.
+- Forwarded headers are opt-in and trusted peers are validated as explicit IP
+  addresses or CIDR networks.
+- CI security, integration, E2E, packaging, DAST, and image-scan jobs are
+  blocking.
+- CI now executes both real-PostgreSQL and full Docker Compose integration
+  suites; unit jobs explicitly exclude browser tests.
+- Alembic is the schema source of truth after one-time legacy bootstrap.
 
 ### Fixed
-- CSP header already present in `SecurityHeadersMiddleware` (no change needed).
-- Multi-arch Docker image already built for `linux/amd64` and `linux/arm64` (no change needed).
-- `ruff-format` hook already present in `.pre-commit-config.yaml` (no change needed).
+- Runtime configuration is applied before API traffic in both launch paths.
+- Dashboard, fragments, media, metrics, and API documentation follow the same
+  authentication policy as REST endpoints.
+- Cookie-authenticated mutations send and validate CSRF tokens; bearer requests
+  remain usable without browser CSRF state.
+- Photo uploads validate content signatures, size, extension consistency, and
+  use unguessable filenames outside the package tree.
+- CSV exports neutralize spreadsheet formulas.
+- CLI module execution can invoke export helpers reliably.
+- Wheel metadata includes templates and migrations.
+- API lifespan disposes database engines it creates without taking ownership
+  of externally supplied engines.
+- Docker Compose integration failures can no longer become skips; the harness
+  uses UTF-8 output, dynamic host ports, isolated resources, and verified
+  teardown.
+- Playwright's local API server now shuts down deterministically.
 
 ---
 

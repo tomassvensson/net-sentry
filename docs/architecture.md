@@ -35,7 +35,7 @@ Net Sentry continuously (or on-demand) scans your wireless and wired environment
                                │ read
      ┌─────────────────────────▼───────────────────────────┐
      │                  FastAPI Application                 │
-     │  (src/api.py)  ─  REST /api/v1/  +  HTMX dashboard  │
+     │  (src/api.py)  ─  REST /api/v1/ + live dashboard    │
      └──────────────────────────────────────────────────────┘
 ```
 
@@ -43,7 +43,11 @@ Net Sentry continuously (or on-demand) scans your wireless and wired environment
 
 ## Scanner Pipeline
 
-Each scanner is an independent module that returns a typed list of results. Scanners run sequentially inside `_execute_all_scanners()` in `src/main.py`. Third-party scanners can be added via the `net_sentry.scanners` entry-point group (see `src/scanner_plugin.py`).
+Each scanner is an independent module that returns a typed list of results.
+Independent scanners run concurrently inside `_execute_all_scanners()` in
+`src/main.py`; dependency-ordered work such as NetBIOS enrichment runs
+afterward. Third-party scanners can be added via the `net_sentry.scanners`
+entry-point group (see `src/scanner_plugin.py`).
 
 | Scanner | Module | Platform | Output type |
 |---|---|---|---|
@@ -140,7 +144,7 @@ FastAPI application at `src/api.py`.
 - **Interactive docs**: `/docs` (Swagger UI), `/redoc`
 - **OpenAPI schema**: `/openapi.json`
 - **Prometheus metrics**: `/metrics`
-- **HTMX dashboard**: `/`
+- **Live dashboard**: `/` (first-party JavaScript, no runtime CDN dependency)
 
 Rate limiting is enforced via `slowapi` (key: client IP). Default limits:
 
@@ -190,10 +194,16 @@ Rate limiting is enforced via `slowapi` (key: client IP). Default limits:
 
 ## Security Model
 
-- The API is **unauthenticated by default** — intended for local-network or private use only.
-- Enable JWT auth by setting `api.auth_enabled: true` in `config.yaml` (or `NET_SENTRY_AUTH_ENABLED=true`).
-- The Docker container requests `NET_ADMIN` + `NET_RAW` capabilities for raw-socket operations but is **not** run with `privileged: true`.
-- All scanning is **passive or initiator-only** — no data is forwarded to or from scanned devices.
+- The safe default is an unauthenticated listener on `127.0.0.1`.
+- Authenticated mode covers REST, dashboard, media, metrics, and API docs and
+  fails startup if secrets, bcrypt hashes, hosts, or CORS policy are unsafe.
+- Browser traffic uses HttpOnly same-site cookies plus CSRF checks; automation
+  uses bearer JWTs.
+- Compose runs non-root/read-only, drops every Linux capability, and publishes
+  on localhost. Privileged monitor-mode access requires an explicit private
+  override.
+- Active scanners are bounded and must only target networks the operator owns
+  or is authorized to assess.
 
 ---
 
