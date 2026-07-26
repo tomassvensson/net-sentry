@@ -24,7 +24,10 @@ def in_memory_engine():
     """Create an in-memory SQLite database for testing."""
     engine = create_engine("sqlite:///:memory:", echo=False)
     Base.metadata.create_all(engine)
-    return engine
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 def _make_wifi_network(**kwargs) -> WifiNetwork:

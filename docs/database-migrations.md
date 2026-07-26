@@ -3,7 +3,7 @@
 This document explains how to create, apply, and roll back database schema
 migrations for Net Sentry.  Net Sentry uses [Alembic](https://alembic.sqlalchemy.org/)
 with a SQLAlchemy Core + ORM setup, and defaults to **SQLite** while optionally
-supporting **PostgreSQL** (see [docker-compose.yml](../../docker-compose.yml),
+supporting **PostgreSQL** (see [docker-compose.yml](../docker-compose.yml),
 `--profile postgres`).
 
 ---
@@ -26,7 +26,7 @@ Set the database URL either in `config.yaml` or via environment variable:
 export DATABASE_URL="sqlite:///data/net-sentry.db"
 
 # PostgreSQL (requires the "postgres" profile in docker-compose)
-export DATABASE_URL="postgresql+pg8000://btwifi:btwifi@localhost:5432/btwifi"
+export DATABASE_URL="postgresql+pg8000://net-sentry:replace-me@localhost:5432/net-sentry"
 ```
 
 ---
@@ -38,7 +38,7 @@ export DATABASE_URL="postgresql+pg8000://btwifi:btwifi@localhost:5432/btwifi"
 alembic upgrade head
 ```
 
-If the database file does not exist yet, Alembic (via `alembic/env.py`) will
+If the database file does not exist yet, Alembic (via `src/migrations/env.py`) will
 create it automatically on the first `upgrade` run.
 
 ---
@@ -70,7 +70,7 @@ migration script automatically:
 alembic revision --autogenerate -m "add_snmp_info_column"
 ```
 
-Review the generated file in `alembic/versions/` before applying it — check
+Review the generated file in `src/migrations/versions/` before applying it — check
 that the `upgrade()` and `downgrade()` functions look correct.
 
 ### Empty / hand-written migration
@@ -79,7 +79,7 @@ that the `upgrade()` and `downgrade()` functions look correct.
 alembic revision -m "drop_legacy_extra_info"
 ```
 
-Then edit `alembic/versions/<rev>_drop_legacy_extra_info.py` by hand.
+Then edit `src/migrations/versions/<rev>_drop_legacy_extra_info.py` by hand.
 
 ---
 
@@ -115,9 +115,10 @@ alembic downgrade abc123
 
 ## Stamping (marking without running SQL)
 
-If the database was created outside of Alembic (e.g. by `init_database()`
-calling `Base.metadata.create_all()`), stamp it at the current head so future
-`upgrade` runs will not try to re-apply already-applied migrations:
+Do not stamp application databases manually during normal operation.
+`init_database()` detects pre-Alembic application tables, aligns the legacy
+schema once, and stamps the packaged head automatically. Manual stamping is
+reserved for an operator who has independently verified the full schema:
 
 ```bash
 alembic stamp head
@@ -131,7 +132,7 @@ alembic stamp head
 2. Always run migrations **before** starting the application server.
 3. For zero-downtime deploys, write additive migrations (new columns with
    defaults, new tables) and only drop columns/tables in a follow-up release.
-4. Keep `alembic/versions/` committed to the repository — never edit or delete
+4. Keep `src/migrations/versions/` committed to the repository — never edit or delete
    a revision that has already been applied in production.
 
 ---
@@ -142,6 +143,11 @@ alembic stamp head
 |----------|-------------|
 | `001_initial_schema` | Creates `devices` and `visibility_windows` tables |
 | `002_reconnect_count` | Adds `reconnect_count` column to `devices` |
+| `003_port_scan_network_segment` | Adds cached ports and network segment |
+| `004_merged_into` | Adds randomized-MAC merge audit field |
+| `005_visibility_window_indices` | Adds time-range query indexes |
+| `006_device_notes_photo` | Adds labels, notes, and photo path |
+| `007_fingerprint_confidence` | Adds fingerprint confidence |
 
 ---
 
@@ -156,7 +162,7 @@ alembic stamp head
 2. Set the URL:
 
    ```bash
-   export DATABASE_URL="postgresql+pg8000://btwifi:btwifi@localhost:5432/btwifi"
+   export DATABASE_URL="postgresql+pg8000://net-sentry:replace-me@localhost:5432/net-sentry"
    ```
 
 3. Apply migrations:

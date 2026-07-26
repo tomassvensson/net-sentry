@@ -6,10 +6,13 @@ import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
+from alembic.config import Config
 from sqlalchemy import Column, Engine, create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from alembic import command
 from src.models import Base
 
 # ---------------------------------------------------------------------------
@@ -58,10 +61,7 @@ def create_db_engine(database_url: str | None = None) -> Engine:
 
 
 def init_database(database_url: str | None = None) -> Engine:
-    """Initialize the database, creating tables if needed.
-
-    Also migrates existing tables by adding any missing columns
-    defined in the models (handles schema evolution without Alembic).
+    """Initialize the database and upgrade it to the latest Alembic revision.
 
     For SQLite databases, enables WAL (Write-Ahead Logging) journal mode
     which allows concurrent readers while a writer is active, improving
@@ -83,10 +83,57 @@ def init_database(database_url: str | None = None) -> Engine:
             conn.commit()
         logger.info("SQLite WAL journal mode enabled.")
 
+    _upgrade_database_schema(engine, database_url or get_database_url())
+    logger.info("Database schema is at the latest Alembic revision.")
+    return engine
+
+
+def _alembic_config(database_url: str) -> Config:
+    """Build a package-safe Alembic configuration for the requested database."""
+    migrations_dir = Path(__file__).resolve().parent / "migrations"
+    config = Config()
+    config.set_main_option("script_location", str(migrations_dir))
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+    return config
+
+
+def _upgrade_database_schema(engine: Engine, database_url: str) -> None:
+    """Upgrade a versioned schema, or bootstrap an older unversioned database once."""
+    inspector = inspect(engine)
+    has_application_tables = inspector.has_table("devices") or inspector.has_table("visibility_windows")
+    has_alembic_version = inspector.has_table("alembic_version")
+    config = _alembic_config(database_url)
+
+    if has_application_tables and not has_alembic_version:
+        logger.warning(
+            "Legacy unversioned database detected; aligning it with current models "
+            "and stamping the Alembic head revision."
+        )
+        _bootstrap_legacy_schema(engine)
+        with engine.begin() as connection:
+            config.attributes["connection"] = connection
+            command.stamp(config, "head")
+        return
+
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "head")
+
+
+def _bootstrap_legacy_schema(engine: Engine) -> None:
+    """One-time compatibility bridge for databases created before Alembic was authoritative."""
     Base.metadata.create_all(engine)
     _migrate_missing_columns(engine)
-    logger.info("Database tables initialized.")
-    return engine
+
+    for table in Base.metadata.sorted_tables:
+        for index in table.indexes:
+            index.create(bind=engine, checkfirst=True)
+
+    # Older installations did not always retain the model-level unique
+    # constraint. Fail loudly on duplicate identities instead of stamping a
+    # schema that cannot uphold the application's core invariant.
+    with engine.begin() as connection:
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_devices_mac_address ON devices (mac_address)"))
 
 
 def _build_default_clause(column: Column, col_type: str) -> str:

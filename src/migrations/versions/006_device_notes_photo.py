@@ -5,8 +5,9 @@ Revises: 005_visibility_window_indices
 Create Date: 2025-01-01
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "006_device_notes_photo"
 down_revision = "005_visibility_window_indices"

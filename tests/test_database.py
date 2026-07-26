@@ -14,7 +14,10 @@ def in_memory_engine():
     """Create an in-memory SQLite database for testing."""
     engine = create_engine("sqlite:///:memory:", echo=False)
     Base.metadata.create_all(engine)
-    return engine
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 class TestDatabaseInit:
@@ -23,18 +26,24 @@ class TestDatabaseInit:
     @pytest.mark.timeout(30)
     def test_init_creates_tables(self) -> None:
         engine = init_database("sqlite:///:memory:")
-        # Verify tables exist by querying them
-        with get_session(engine) as session:
-            # Should not raise
-            session.query(Device).all()
-            session.query(VisibilityWindow).all()
+        try:
+            # Verify tables exist by querying them
+            with get_session(engine) as session:
+                # Should not raise
+                session.query(Device).all()
+                session.query(VisibilityWindow).all()
+        finally:
+            engine.dispose()
 
     @pytest.mark.timeout(30)
     def test_init_idempotent(self) -> None:
         """Calling init_database twice should not fail."""
         engine = init_database("sqlite:///:memory:")
-        # Call again — should be fine
-        Base.metadata.create_all(engine)
+        try:
+            # Call again — should be fine
+            Base.metadata.create_all(engine)
+        finally:
+            engine.dispose()
 
 
 class TestDeviceModel:
@@ -140,9 +149,10 @@ class TestMigrateMissingColumns:
     """Tests for automatic schema migration of missing columns."""
 
     @pytest.mark.timeout(30)
-    def test_adds_missing_columns_to_existing_table(self) -> None:
+    def test_adds_missing_columns_to_existing_table(self, request: pytest.FixtureRequest) -> None:
         """Simulate an old DB schema missing hostname/ip_address/category/extra_info/is_whitelisted."""
         engine = create_engine("sqlite:///:memory:", echo=False)
+        request.addfinalizer(engine.dispose)
 
         # Create a minimal 'devices' table missing the newer columns
         with engine.begin() as conn:
@@ -205,9 +215,10 @@ class TestMigrateMissingColumns:
         assert "is_whitelisted" in new_cols
 
     @pytest.mark.timeout(30)
-    def test_migration_idempotent(self) -> None:
+    def test_migration_idempotent(self, request: pytest.FixtureRequest) -> None:
         """Running migration twice should not fail."""
         engine = create_engine("sqlite:///:memory:", echo=False)
+        request.addfinalizer(engine.dispose)
         Base.metadata.create_all(engine)
         # First call — nothing to do
         _migrate_missing_columns(engine)
@@ -215,9 +226,10 @@ class TestMigrateMissingColumns:
         _migrate_missing_columns(engine)
 
     @pytest.mark.timeout(30)
-    def test_init_database_migrates_old_schema(self) -> None:
+    def test_init_database_migrates_old_schema(self, request: pytest.FixtureRequest) -> None:
         """init_database should be able to query Device after migrating an old schema."""
         engine = create_engine("sqlite:///:memory:", echo=False)
+        request.addfinalizer(engine.dispose)
 
         # Create old schema manually
         with engine.begin() as conn:

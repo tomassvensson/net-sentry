@@ -34,7 +34,10 @@ def engine():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(eng)
-    return eng
+    try:
+        yield eng
+    finally:
+        eng.dispose()
 
 
 def _make_device(session, mac: str, device_type: str = "wifi_client", **kwargs) -> Device:

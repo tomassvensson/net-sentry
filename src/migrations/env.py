@@ -7,9 +7,9 @@ and uses the Net Sentry models as the migration target metadata.
 import os
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import create_engine, pool
 
+from alembic import context
 from src.models import Base
 
 config = context.config
@@ -38,6 +38,13 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode (connected to database)."""
+    supplied_connection = config.attributes.get("connection")
+    if supplied_connection is not None:
+        context.configure(connection=supplied_connection, target_metadata=target_metadata)
+        with context.begin_transaction():
+            context.run_migrations()
+        return
+
     connectable = create_engine(_db_url or "sqlite:///net-sentry.db", poolclass=pool.NullPool)
 
     with connectable.connect() as connection:

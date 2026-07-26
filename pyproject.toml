@@ -116,12 +116,26 @@ ignore_missing_imports = true  # third-party libs without stubs
 
 # Per-module overrides for legacy / generated code
 [[tool.mypy.overrides]]
-module = ["alembic.*", "alembic.versions.*"]
+module = ["src.migrations.*"]
 ignore_errors = true
 
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.setuptools.package-data]
+src = [
+    "templates/*.html",
+    "migrations/*.py",
+    "migrations/*.mako",
+    "migrations/versions/*.py",
+]
 
 [tool.coverage.run]
 source = ["src"]

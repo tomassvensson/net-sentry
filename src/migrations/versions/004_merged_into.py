@@ -5,8 +5,9 @@ Revises: 003_port_scan_network_segment
 Create Date: 2026-04-26 00:00:00.000000
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "004_merged_into"
 down_revision = "003_port_scan_network_segment"

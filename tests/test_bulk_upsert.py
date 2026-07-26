@@ -15,8 +15,11 @@ from src.network_discovery import NetworkDevice
 def db_session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
-    with Session(engine) as session:
-        yield session
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
 
 
 def _make_device(mac: str, ip: str = "10.0.0.1", hostname: str | None = None) -> NetworkDevice:

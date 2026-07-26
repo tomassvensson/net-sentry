@@ -2,17 +2,22 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import create_engine
 
 from src.database import purge_old_windows
 from src.models import Base, VisibilityWindow
 
 
-def _in_memory_engine():
+@pytest.fixture()
+def engine():
     """Create a fresh in-memory SQLite engine with schema applied."""
-    engine = create_engine("sqlite:///:memory:", echo=False)
-    Base.metadata.create_all(engine)
-    return engine
+    db_engine = create_engine("sqlite:///:memory:", echo=False)
+    Base.metadata.create_all(db_engine)
+    try:
+        yield db_engine
+    finally:
+        db_engine.dispose()
 
 
 def _make_window(session, mac: str, days_ago_end: float) -> VisibilityWindow:
@@ -35,11 +40,10 @@ def _make_window(session, mac: str, days_ago_end: float) -> VisibilityWindow:
 # ---------------------------------------------------------------------------
 
 
-def test_purge_old_windows_zero_retention_keeps_all():
+def test_purge_old_windows_zero_retention_keeps_all(engine):
     """retention_days=0 should keep every row (no deletion)."""
     from sqlalchemy.orm import Session
 
-    engine = _in_memory_engine()
     with Session(engine) as session:
         _make_window(session, "AA:BB:CC:DD:EE:01", days_ago_end=100)
         _make_window(session, "AA:BB:CC:DD:EE:01", days_ago_end=200)
@@ -54,11 +58,10 @@ def test_purge_old_windows_zero_retention_keeps_all():
     assert count == 2
 
 
-def test_purge_old_windows_removes_old_records():
+def test_purge_old_windows_removes_old_records(engine):
     """Windows older than retention_days should be deleted; newer ones kept."""
     from sqlalchemy.orm import Session
 
-    engine = _in_memory_engine()
     with Session(engine) as session:
         _make_window(session, "AA:BB:CC:DD:EE:02", days_ago_end=60)  # old — should be deleted
         _make_window(session, "AA:BB:CC:DD:EE:02", days_ago_end=10)  # recent — should be kept
@@ -80,11 +83,10 @@ def test_purge_old_windows_removes_old_records():
     assert last_seen > naive_cutoff
 
 
-def test_purge_old_windows_all_old_records():
+def test_purge_old_windows_all_old_records(engine):
     """All records older than retention_days are deleted."""
     from sqlalchemy.orm import Session
 
-    engine = _in_memory_engine()
     with Session(engine) as session:
         _make_window(session, "AA:BB:CC:DD:EE:03", days_ago_end=90)
         _make_window(session, "AA:BB:CC:DD:EE:03", days_ago_end=120)
@@ -99,11 +101,10 @@ def test_purge_old_windows_all_old_records():
     assert count == 0
 
 
-def test_purge_old_windows_does_not_raise():
+def test_purge_old_windows_does_not_raise(engine):
     """purge_old_windows completes without exceptions on a real SQLite engine."""
     from sqlalchemy.orm import Session
 
-    engine = _in_memory_engine()
     with Session(engine) as session:
         _make_window(session, "AA:BB:CC:DD:EE:04", days_ago_end=60)
         session.commit()
@@ -113,11 +114,10 @@ def test_purge_old_windows_does_not_raise():
     assert deleted >= 0
 
 
-def test_purge_old_windows_no_vacuum_when_no_rows_deleted():
+def test_purge_old_windows_no_vacuum_when_no_rows_deleted(engine):
     """VACUUM should not run if no rows were deleted (avoids unnecessary disk I/O)."""
     from sqlalchemy.orm import Session
 
-    engine = _in_memory_engine()
     with Session(engine) as session:
         _make_window(session, "AA:BB:CC:DD:EE:05", days_ago_end=5)  # very recent — not deleted
         session.commit()
