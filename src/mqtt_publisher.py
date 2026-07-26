@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover
 
 
 class MqttPublisher:
-    """Publishes BtWiFi events to an MQTT broker."""
+    """Publishes Net Sentry events to an MQTT broker."""
 
     def __init__(
         self,

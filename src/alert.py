@@ -68,7 +68,8 @@ class WebhookDispatcher:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+            # URL scheme and hostname are validated centrally by validate_config.
+            with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310
                 status = resp.status
                 if status not in (200, 201, 202):
                     logger.warning("Webhook returned non-success status %d", status)
@@ -357,6 +358,52 @@ class AlertManager:
                 rule.mac_address,
                 elapsed_minutes,
             )
+
+    def check_unseen_devices(self, all_devices: list[tuple[str, datetime | None, str, str | None]]) -> None:
+        """Check for devices that have not been seen in 2 weeks or never.
+
+        Args:
+            all_devices: List of tuples (mac_address, last_seen, device_type, device_name).
+        """
+        if not self._config.enabled:
+            return
+
+        now_dt = datetime.now(UTC)
+        two_weeks_seconds = 14 * 24 * 60 * 60
+
+        for mac_address, last_seen, device_type, device_name in all_devices:
+            if last_seen is None:
+                elapsed_seconds = float("inf")
+                elapsed_str = "never"
+            else:
+                if last_seen.tzinfo is None:
+                    last_seen = last_seen.replace(tzinfo=UTC)
+                elapsed_seconds = int((now_dt - last_seen).total_seconds())
+                elapsed_str = f"{elapsed_seconds / 86400:.1f} days"
+
+            if elapsed_seconds <= two_weeks_seconds:
+                continue
+
+            alert_key = f"unseen:{mac_address}"
+            last_alerted = self._last_alerted.get(alert_key)
+            if last_alerted is not None and (now_dt - last_alerted).total_seconds() < self._config.cooldown_seconds:
+                continue
+
+            self._last_alerted[alert_key] = now_dt
+            self._alert_count += 1
+
+            device_label = device_name or mac_address
+            if elapsed_seconds == float("inf"):
+                message = f"Device {device_label} ({device_type}) has never been seen in the network"
+                logger.warning(message)
+                _alert_logger.info("[UNSEEN] %s", message)
+            else:
+                message = f"Device {device_label} ({device_type}) has not been seen for {elapsed_str}"
+                logger.warning(message)
+                _alert_logger.info("[UNSEEN] %s", message)
+
+            if self._webhook:
+                self._webhook.dispatch(message, mac_address=mac_address, device_type=device_type)
 
     @property
     def alert_count(self) -> int:

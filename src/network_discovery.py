@@ -294,6 +294,7 @@ def ping_sweep(
     max_workers: int = 40,
     timeout: float = 1.0,
     subnet_labels: dict[str, str] | None = None,
+    max_targets: int = 4096,
 ) -> list[NetworkDevice]:
     """Ping-sweep one or more subnets and return responding hosts.
 
@@ -309,23 +310,43 @@ def ping_sweep(
             provided, each discovered device gets its ``network_segment``
             field set to the corresponding label (or the raw CIDR if no
             label is defined).
+        max_targets: Hard upper bound across all subnets. Oversized
+            configurations fail closed before probes are scheduled.
 
     Returns:
         List of NetworkDevice objects for responding hosts.
     """
     _subnet_labels: dict[str, str] = subnet_labels or {}
     # Build a map from each host IP to its source CIDR (for labelling)
+    if max_workers < 1:
+        raise ValueError("max_workers must be at least 1")
+    if max_targets < 1:
+        raise ValueError("max_targets must be at least 1")
+
     ip_to_cidr: dict[str, str] = {}
     targets: list[str] = []
+    seen_targets: set[str] = set()
     for cidr in subnets:
         try:
             network = ipaddress.ip_network(cidr, strict=False)
-            for h in network.hosts():
-                host_str = str(h)
-                targets.append(host_str)
-                ip_to_cidr[host_str] = cidr
         except ValueError:
             logger.warning("Invalid subnet: %s", cidr)
+            continue
+        if network.version != 4:
+            logger.warning("Ping sweep supports IPv4 only; skipping subnet: %s", cidr)
+            continue
+        for h in network.hosts():
+            host_str = str(h)
+            if host_str in seen_targets:
+                continue
+            if len(targets) >= max_targets:
+                raise ValueError(
+                    f"Ping sweep target limit exceeded ({max_targets}); "
+                    "narrow the configured subnets or raise ping_sweep.max_targets explicitly"
+                )
+            seen_targets.add(host_str)
+            targets.append(host_str)
+            ip_to_cidr[host_str] = cidr
 
     if not targets:
         return []
@@ -446,7 +467,11 @@ def _process_windows_route_line(stripped: str, ipv4_section: bool, subnets: set[
     if len(parts) < 2:
         return ipv4_section
     dest, mask = parts[0], parts[1]
-    if dest in ("0.0.0.0", "127.0.0.0"):
+    try:
+        destination_address = ipaddress.ip_address(dest)
+    except ValueError:
+        return ipv4_section
+    if destination_address.is_unspecified or destination_address.is_loopback:
         return ipv4_section
     try:
         net = ipaddress.ip_network(f"{dest}/{mask}", strict=False)

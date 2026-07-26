@@ -81,7 +81,7 @@ class ScanResult:
 
 
 class ScannerPlugin(ABC):
-    """Abstract base class for BtWiFi scanner plugins.
+    """Abstract base class for Net Sentry scanner plugins.
 
     Subclass this and register the subclass as an entry point under the
     ``net_sentry.scanners`` group.

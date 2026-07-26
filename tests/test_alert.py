@@ -359,3 +359,79 @@ class TestOnReturningDevice:
         mgr.on_returning_device("AA:BB:CC:DD:EE:FF", "wifi_ap", 20.0)
         mgr.on_returning_device("AA:BB:CC:DD:EE:FF", "wifi_ap", 20.0)
         assert mgr.alert_count == 1
+
+
+class TestUnseenDeviceAlerts:
+    """Tests for unseen device alerts (not seen in 2 weeks)."""
+
+    @pytest.mark.timeout(30)
+    def test_unseen_devices_alert_enabled(self) -> None:
+        from datetime import timedelta
+
+        config = AlertConfig(enabled=True, cooldown_seconds=0)
+        mgr = AlertManager(config)
+        now = datetime.now(UTC)
+        three_weeks_ago = now - timedelta(weeks=3)
+        devices = [
+            ("AA:BB:CC:DD:EE:01", three_weeks_ago, "wifi_ap", "OldDevice"),
+            ("AA:BB:CC:DD:EE:02", None, "bluetooth", "NeverSeen"),
+        ]
+        mgr.check_unseen_devices(devices)
+        assert mgr.alert_count == 2
+
+    @pytest.mark.timeout(30)
+    def test_unseen_devices_recent_not_alerted(self) -> None:
+        from datetime import timedelta
+
+        config = AlertConfig(enabled=True, cooldown_seconds=0)
+        mgr = AlertManager(config)
+        now = datetime.now(UTC)
+        one_day_ago = now - timedelta(days=1)
+        devices = [
+            ("AA:BB:CC:DD:EE:01", one_day_ago, "network", "RecentDevice"),
+        ]
+        mgr.check_unseen_devices(devices)
+        assert mgr.alert_count == 0
+
+    @pytest.mark.timeout(30)
+    def test_unseen_devices_exactly_two_weeks(self) -> None:
+        from datetime import timedelta
+
+        config = AlertConfig(enabled=True, cooldown_seconds=0)
+        mgr = AlertManager(config)
+        now = datetime.now(UTC)
+        exactly_two_weeks = now - timedelta(weeks=2)
+        devices = [
+            ("AA:BB:CC:DD:EE:01", exactly_two_weeks, "network", "EdgeCase"),
+        ]
+        mgr.check_unseen_devices(devices)
+        assert mgr.alert_count == 0
+
+    @pytest.mark.timeout(30)
+    def test_unseen_devices_cooldown(self) -> None:
+        from datetime import timedelta
+
+        config = AlertConfig(enabled=True, cooldown_seconds=300)
+        mgr = AlertManager(config)
+        now = datetime.now(UTC)
+        three_weeks_ago = now - timedelta(weeks=3)
+        devices = [
+            ("AA:BB:CC:DD:EE:01", three_weeks_ago, "wifi_ap", "OldDevice"),
+        ]
+        mgr.check_unseen_devices(devices)
+        mgr.check_unseen_devices(devices)
+        assert mgr.alert_count == 1
+
+    @pytest.mark.timeout(30)
+    def test_unseen_devices_disabled(self) -> None:
+        from datetime import timedelta
+
+        config = AlertConfig(enabled=False)
+        mgr = AlertManager(config)
+        now = datetime.now(UTC)
+        three_weeks_ago = now - timedelta(weeks=3)
+        devices = [
+            ("AA:BB:CC:DD:EE:01", three_weeks_ago, "wifi_ap", "OldDevice"),
+        ]
+        mgr.check_unseen_devices(devices)
+        assert mgr.alert_count == 0

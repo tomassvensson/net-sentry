@@ -36,9 +36,9 @@ _OUI_URL = "https://standards-oui.ieee.org/oui/oui.csv"
 _DEFAULT_OUTPUT = Path(__file__).parent.parent / "src" / "data" / "oui.csv"
 
 # Retry / back-off settings
-_MIN_DELAY_SECONDS = 1.0       # minimum inter-request delay
-_MAX_BACKOFF_SECONDS = 120.0   # maximum backoff cap
-_MAX_RETRIES = 5               # total attempts (initial + retries)
+_MIN_DELAY_SECONDS = 1.0  # minimum inter-request delay
+_MAX_BACKOFF_SECONDS = 120.0  # maximum backoff cap
+_MAX_RETRIES = 5  # total attempts (initial + retries)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Download with exponential backoff
 # ---------------------------------------------------------------------------
+
 
 def _download_with_backoff(url: str) -> bytes:
     """Download *url* with exponential backoff.
@@ -99,11 +100,12 @@ def _download_with_backoff(url: str) -> bytes:
 # CSV validation
 # ---------------------------------------------------------------------------
 
+
 def _validate_oui_csv(data: bytes) -> int:
     """Return the number of non-header lines in the OUI CSV, or 0 on failure."""
     try:
         text = data.decode("utf-8", errors="replace")
-        lines = [l for l in text.splitlines() if l.strip() and not l.startswith("Registry")]
+        lines = [line for line in text.splitlines() if line.strip() and not line.startswith("Registry")]
         return len(lines)
     except Exception as exc:
         logger.warning("Could not parse OUI CSV: %s", exc)
@@ -113,6 +115,7 @@ def _validate_oui_csv(data: bytes) -> int:
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     """Main entrypoint for the OUI updater script."""
@@ -135,9 +138,7 @@ def main() -> None:
 
     count = _validate_oui_csv(data)
     if count < 1000:
-        logger.error(
-            "OUI CSV appears incomplete or malformed (%d entries). Aborting write.", count
-        )
+        logger.error("OUI CSV appears incomplete or malformed (%d entries). Aborting write.", count)
         sys.exit(1)
 
     output_path.write_bytes(data)

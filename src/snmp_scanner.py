@@ -29,9 +29,11 @@ Typical keys:
 import asyncio
 import logging
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from ipaddress import IPv4Network
+from itertools import islice
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -202,7 +204,7 @@ def query_snmp_device(
 
 
 def scan_snmp_devices(
-    hosts: list[str],
+    hosts: Iterable[str],
     community: str = "public",
     port: int = 161,
     timeout: int = 2,
@@ -253,9 +255,9 @@ def scan_snmp_devices(
 
 
 class SnmpScanner:
-    """BtWiFi scanner plugin for SNMP device discovery.
+    """Net Sentry scanner plugin for SNMP device discovery.
 
-    Registered automatically via the ``btwifi.scanners`` entry-point
+    Registered automatically via the ``net_sentry.scanners`` entry-point
     group in :file:`pyproject.toml`.
     """
 
@@ -302,10 +304,11 @@ class SnmpScanner:
             return []
 
         try:
-            hosts = [str(ip) for ip in IPv4Network(subnet, strict=False).hosts()]
+            network = IPv4Network(subnet, strict=False)
         except ValueError:
             logger.error("SNMP scanner: invalid subnet %r", subnet)
             return []
+        hosts = (str(ip) for ip in islice(network.hosts(), max_hosts))
 
         infos = scan_snmp_devices(
             hosts,

@@ -33,6 +33,7 @@ from src.device_tracker import (
     track_wifi_scan,
     update_visibility,
 )
+from src.export_utils import sanitize_csv_value
 from src.home_assistant import HaDevice, build_ha_lookup, enrich_from_ha, fetch_ha_devices
 from src.ipv6_scanner import Ipv6Neighbor, scan_ipv6_neighbors
 from src.logging_setup import setup_logging
@@ -240,14 +241,27 @@ def run_scan(config: AppConfig | None = None, rescan_ports: bool = False) -> Non
         )
         mqtt_pub.connect()
 
+    try:
+        _run_scan_cycles(engine, config, whitelist, alert_mgr, mqtt_pub, rescan_ports)
+    finally:
+        if mqtt_pub is not None:
+            mqtt_pub.disconnect()
+        engine.dispose()
+
+
+def _run_scan_cycles(
+    engine: Engine,
+    config: AppConfig,
+    whitelist: WhitelistManager,
+    alert_mgr: AlertManager,
+    mqtt_pub: object | None,
+    rescan_ports: bool,
+) -> None:
+    """Run one or more scan cycles using already-initialized resources."""
     if config.scan.continuous:
         _run_continuous_scan(engine, config, whitelist, alert_mgr, mqtt_pub, rescan_ports=rescan_ports)
     else:
         _run_single_scan(engine, config, whitelist, alert_mgr, mqtt_pub, rescan_ports=rescan_ports)
-
-    # Cleanup MQTT
-    if mqtt_pub is not None:
-        mqtt_pub.disconnect()
 
 
 def _run_continuous_scan(
@@ -344,6 +358,21 @@ def _run_single_scan(
             )
         last_seen_by_mac = {mac: last for mac, last in rows if last is not None}
         alert_mgr.check_disappearance(last_seen_by_mac)
+
+    # Check for devices not seen in 2 weeks
+    with get_session(engine) as session:
+        device_last_seen = (
+            session.query(
+                Device.mac_address,
+                func.max(VisibilityWindow.last_seen),
+                Device.device_type,
+                Device.device_name,
+            )
+            .outerjoin(VisibilityWindow, Device.mac_address == VisibilityWindow.mac_address)
+            .group_by(Device.mac_address, Device.device_type, Device.device_name)
+            .all()
+        )
+    alert_mgr.check_unseen_devices([tuple(row) for row in device_last_seen])
 
     scan_duration = time.time() - scan_start
 
@@ -447,6 +476,7 @@ def _build_scanner_tasks(
             max_workers=config.ping_sweep.max_workers,
             timeout=config.ping_sweep.timeout_seconds,
             subnet_labels=config.ping_sweep.subnet_labels or None,
+            max_targets=config.ping_sweep.max_targets,
         )
     if config.scan.mdns_enabled:
         allowed = config.mdns.service_types or None
@@ -1533,8 +1563,9 @@ def main() -> None:
         if config.api.enabled:
             import threading
 
-            from src.api import app, set_engine
+            from src.api import app, configure_app, set_engine
 
+            configure_app(config)
             engine = init_database(config.database.url)
             set_engine(engine)
 
@@ -1546,6 +1577,9 @@ def main() -> None:
                     host=config.api.host,
                     port=config.api.port,
                     log_level="warning",
+                    proxy_headers=config.api.proxy_headers,
+                    forwarded_allow_ips=config.api.forwarded_allow_ips,
+                    server_header=False,
                 )
 
             api_thread = threading.Thread(target=_run_api, daemon=True, name="api-server")
@@ -1559,10 +1593,6 @@ def main() -> None:
     except Exception:
         logger.exception("Fatal error during scan.")
         sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()
 
 
 # ---------------------------------------------------------------------------
@@ -1595,7 +1625,7 @@ def _run_cli_export() -> None:  # noqa: PLR0912
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="btwifi --export",
+        prog="net-sentry --export",
         description="Export device data to CSV or JSON.",
     )
     parser.add_argument(
@@ -1634,7 +1664,7 @@ def _run_cli_export() -> None:  # noqa: PLR0912
                 writer = csv.DictWriter(buf, fieldnames=_EXPORT_CSV_FIELDS, extrasaction="ignore")
                 writer.writeheader()
                 for dev in devices:
-                    writer.writerow({f: (getattr(dev, f, None) or "") for f in _EXPORT_CSV_FIELDS})
+                    writer.writerow({f: sanitize_csv_value(getattr(dev, f, None) or "") for f in _EXPORT_CSV_FIELDS})
             else:
                 rows = [{f: str(getattr(dev, f, None) or "") for f in _EXPORT_CSV_FIELDS} for dev in devices]
                 json.dump(rows, buf, indent=2, default=str)
@@ -1644,3 +1674,7 @@ def _run_cli_export() -> None:  # noqa: PLR0912
                 print(buf.getvalue())  # type: ignore[union-attr]
             else:
                 logger.info("Exported %d devices to %s", len(devices), args.output)
+
+
+if __name__ == "__main__":
+    main()

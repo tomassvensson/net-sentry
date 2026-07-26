@@ -67,7 +67,8 @@ def fetch_ha_devices(
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        # URL scheme and hostname are validated centrally by validate_config.
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             raw_data = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         logger.exception("Home Assistant API error: HTTP %d for %s", exc.code, url)

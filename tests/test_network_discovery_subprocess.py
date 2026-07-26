@@ -260,6 +260,13 @@ class TestPingSweep:
         devices = ping_sweep(["not-a-subnet"])
         assert devices == []
 
+    @patch("src.network_discovery._ping_host")
+    @pytest.mark.timeout(30)
+    def test_oversized_subnet_fails_before_probing(self, mock_ping) -> None:
+        with pytest.raises(ValueError, match="target limit exceeded"):
+            ping_sweep(["10.0.0.0/8"], max_targets=32)
+        mock_ping.assert_not_called()
+
     @patch("src.network_discovery._resolve_hostname", return_value=None)
     @patch("src.network_discovery._ping_host", return_value=None)
     @pytest.mark.timeout(30)

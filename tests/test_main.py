@@ -41,7 +41,10 @@ def in_memory_engine():
     """Create an in-memory SQLite database for testing."""
     engine = create_engine("sqlite:///:memory:", echo=False)
     Base.metadata.create_all(engine)
-    return engine
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 class TestFormatSignal:
@@ -298,9 +301,10 @@ class TestRunScan:
         mock_wifi_scan,
         mock_bt_scan,
         mock_arp_scan,
+        tmp_path,
     ) -> None:
         """Test full scan cycle with mocked external dependencies."""
-        engine = create_engine("sqlite:///:memory:", echo=False)
+        engine = create_engine(f"sqlite:///{tmp_path / 'full-scan.db'}", echo=False)
         Base.metadata.create_all(engine)
         mock_init_db.return_value = engine
 
@@ -341,9 +345,12 @@ class TestRunScan:
         config.scan.ipv6_enabled = False
         run_scan(config)
 
-        with get_session(engine) as session:
-            devices = session.query(Device).all()
-            assert len(devices) == 3
+        try:
+            with get_session(engine) as session:
+                devices = session.query(Device).all()
+                assert len(devices) == 3
+        finally:
+            engine.dispose()
 
     @patch("src.main.scan_arp_table")
     @patch("src.main.scan_bluetooth_devices")
@@ -996,12 +1003,13 @@ class TestRunScanWithAllScanners:
         mock_mdns: MagicMock,
         mock_ssdp: MagicMock,
         mock_netbios: MagicMock,
+        tmp_path,
     ) -> None:
         from src.mdns_scanner import MdnsDevice
         from src.network_discovery import NetworkDevice
         from src.ssdp_scanner import SsdpDevice
 
-        engine = create_engine("sqlite:///:memory:", echo=False)
+        engine = create_engine(f"sqlite:///{tmp_path / 'all-scanners.db'}", echo=False)
         Base.metadata.create_all(engine)
         mock_init_db.return_value = engine
 
@@ -1040,9 +1048,12 @@ class TestRunScanWithAllScanners:
         config.scan.ipv6_enabled = False
         run_scan(config)
 
-        with get_session(engine) as session:
-            devices = session.query(Device).all()
-            assert len(devices) == 3  # ARP + mDNS + SSDP
+        try:
+            with get_session(engine) as session:
+                devices = session.query(Device).all()
+                assert len(devices) == 3  # ARP + mDNS + SSDP
+        finally:
+            engine.dispose()
 
 
 class TestMainEntryPoint:
