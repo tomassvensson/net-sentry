@@ -312,6 +312,11 @@ It is auto-provisioned when you start the dashboards stack (see Docker section b
 docker compose up net-sentry
 ```
 
+Compose uses the tracked `config.yaml.example` on a clean checkout. To mount a
+custom file, set `NET_SENTRY_CONFIG_FILE=./config.yaml` after copying and editing
+the example; the long-form bind mount fails fast if the selected file is
+missing instead of silently creating a directory.
+
 On Docker Desktop for Windows, Bluetooth hardware is not passed through to the Linux container. The compose stack therefore disables Bluetooth and BLE scanners by default while still allowing the service to start. To opt in on a host/container setup that exposes Bluetooth:
 
 ```bash

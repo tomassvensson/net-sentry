@@ -12,8 +12,10 @@ application port remains bound to host loopback by the base Compose file.
 2. Copy `.env.production.example` to `.env.production` and set the public host,
    exact HTTPS origin, and ACME contact address.
 3. Copy `config.yaml.example` to `config.yaml` and configure only the scanners
-   and integrations needed on this host. Authentication, hosts, origins,
-   cookies, proxy trust, and credentials are forced by the production override.
+   and integrations needed on this host. The production environment template
+   sets `NET_SENTRY_CONFIG_FILE=./config.yaml`; Compose refuses to start if that
+   file is missing. Authentication, hosts, origins, cookies, proxy trust, and
+   credentials are forced by the production override.
 4. Create `secrets/net_sentry_jwt_secret.txt` with a stable random signing
    secret of at least 32 bytes:
 

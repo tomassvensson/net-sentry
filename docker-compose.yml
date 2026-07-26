@@ -7,7 +7,12 @@ services:
       - "127.0.0.1:${NET_SENTRY_PUBLISHED_PORT:-8000}:8000"
     volumes:
       - net_sentry_data:/app/data
-      - ./config.yaml:/app/config.yaml:ro
+      - type: bind
+        source: ${NET_SENTRY_CONFIG_FILE:-./config.yaml.example}
+        target: /app/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
     environment:
       - NET_SENTRY_CONTINUOUS=true
       - NET_SENTRY_SCAN_INTERVAL=60
