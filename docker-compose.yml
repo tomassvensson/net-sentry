@@ -1,26 +1,36 @@
 services:
   net-sentry:
     build: .
-    container_name: net-sentry-scanner
     restart: unless-stopped
-    # NOTE: network_mode: host is Linux-only and required for raw-socket scanning.
-    # On Windows (Docker Desktop) use the override file:
-    #   docker compose -f docker-compose.yml -f docker-compose.windows.yml up
-    network_mode: host
+    init: true
+    ports:
+      - "127.0.0.1:${NET_SENTRY_PUBLISHED_PORT:-8000}:8000"
     volumes:
-      - ./data:/app/data
+      - net_sentry_data:/app/data
       - ./config.yaml:/app/config.yaml:ro
     environment:
       - NET_SENTRY_CONTINUOUS=true
       - NET_SENTRY_SCAN_INTERVAL=60
-      - DATABASE_URL=sqlite:///data/net-sentry.db
-    # Required for Bluetooth and network scanning
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    # Give access to Bluetooth device (Linux only — omitted on Windows via override)
-    devices:
-      - /dev/bluetooth:/dev/bluetooth
+      - NET_SENTRY_API_HOST=0.0.0.0
+      - NET_SENTRY_ALLOWED_HOSTS=localhost,127.0.0.1,net-sentry
+      # Docker Desktop on Windows cannot pass host Bluetooth devices through
+      # to a Linux container. Leave these disabled by default; opt in with
+      # NET_SENTRY_SCAN_BLUETOOTH=true and/or NET_SENTRY_SCAN_BLE=true.
+      - NET_SENTRY_SCAN_BLUETOOTH=${NET_SENTRY_SCAN_BLUETOOTH:-false}
+      - NET_SENTRY_SCAN_BLE=${NET_SENTRY_SCAN_BLE:-false}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///data/net-sentry.db}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    # Monitor mode requires NET_ADMIN and host-specific device access. Add
+    # those explicitly in a private compose override only when needed.
+    # Give access to Bluetooth device
+#    devices:
+#      - /dev/bluetooth:/dev/bluetooth
     privileged: false
 
   # -------------------------------------------------------------------------
@@ -38,11 +48,10 @@ services:
   # -------------------------------------------------------------------------
   prometheus:
     image: prom/prometheus:v2.52.0
-    container_name: net-sentry-prometheus
     profiles: [dashboards]
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      - "127.0.0.1:${PROMETHEUS_PUBLISHED_PORT:-9090}:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -50,16 +59,13 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --web.enable-lifecycle
-    extra_hosts:
-      - "net-sentry:host-gateway"  # allow Prometheus to reach Net Sentry on the host
 
   grafana:
     image: grafana/grafana:10.4.2
-    container_name: net-sentry-grafana
     profiles: [dashboards]
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:${GRAFANA_PUBLISHED_PORT:-3000}:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
@@ -80,14 +86,11 @@ services:
   # -------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
-    container_name: net-sentry-postgres
     profiles: [postgres]
     restart: unless-stopped
-    ports:
-      - "5432:5432"
     environment:
       - POSTGRES_USER=net-sentry
-      - POSTGRES_PASSWORD=net-sentry
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-net-sentry-local-only}
       - POSTGRES_DB=net-sentry
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -99,22 +102,75 @@ services:
 
   pgadmin:
     image: dpage/pgadmin4:8.6
-    container_name: net-sentry-pgadmin
     profiles: [postgres]
     restart: unless-stopped
     ports:
-      - "5050:80"
+      - "127.0.0.1:${PGADMIN_PUBLISHED_PORT:-5050}:80"
     environment:
       - PGADMIN_DEFAULT_EMAIL=admin@net-sentry.local
-      - PGADMIN_DEFAULT_PASSWORD=admin
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD:-admin-local-only}
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     depends_on:
       postgres:
         condition: service_healthy
 
+  # -------------------------------------------------------------------------
+  # "sonarqube" profile — SonarQube code quality analysis
+  #
+  # Bring up SonarQube:
+  #   docker compose --profile sonarqube up
+  #
+  # Access:
+  #   SonarQube:  http://localhost:9000  (default login: admin / admin)
+  #   PostgreSQL: localhost:5433
+  #
+  # SonarQube will use PostgreSQL as its database backend.
+  # To scan the project, run from the host:
+  #   sonar-scanner (requires sonar-scanner CLI installed)
+  # Or use the SonarQube GitHub Action in CI.
+  # -------------------------------------------------------------------------
+  sonarqube-db:
+    image: postgres:16.2-alpine
+    profiles: [sonarqube]
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=sonar
+      - POSTGRES_PASSWORD=sonar
+      - POSTGRES_DB=sonarqube
+    volumes:
+      - sonarqube_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sonar"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  sonarqube:
+    image: sonarqube:10.5.1-community
+    profiles: [sonarqube]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SONARQUBE_PUBLISHED_PORT:-9000}:9000"
+    environment:
+      - SONAR_JDBC_URL=jdbc:postgresql://sonarqube-db:5432/sonarqube
+      - SONAR_JDBC_USERNAME=sonar
+      - SONAR_JDBC_PASSWORD=sonar
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_logs:/opt/sonarqube/logs
+      - sonarqube_extensions:/opt/sonarqube/extensions
+    depends_on:
+      sonarqube-db:
+        condition: service_healthy
+
 volumes:
+  net_sentry_data:
   prometheus_data:
   grafana_data:
   postgres_data:
   pgadmin_data:
+  sonarqube_db:
+  sonarqube_data:
+  sonarqube_logs:
+  sonarqube_extensions:

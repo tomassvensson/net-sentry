@@ -42,9 +42,14 @@ $RECYCLE.BIN/
 
 # Environment variables
 .env
+.env.production
+
+# Runtime secrets
+secrets/
 
 # Test / Coverage
 htmlcov/
+.audit-requirements.txt
 .tox/
 .nox/
 .coverage

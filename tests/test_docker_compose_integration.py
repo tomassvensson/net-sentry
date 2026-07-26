@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import socket
 import time
 from typing import TYPE_CHECKING
 
@@ -11,10 +13,21 @@ import requests
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-COMPOSE_FILE = "docker-compose.yml"
-API_BASE = "http://localhost:8000"
-PROMETHEUS_BASE = "http://localhost:9090"
-GRAFANA_BASE = "http://localhost:3000"
+COMPOSE_PROJECT = "net-sentry-integration"
+
+
+def _get_free_ports(count: int) -> list[int]:
+    """Allocate distinct loopback ports for the isolated Compose project."""
+    sockets: list[socket.socket] = []
+    try:
+        for _ in range(count):
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listener.bind(("127.0.0.1", 0))
+            sockets.append(listener)
+        return [listener.getsockname()[1] for listener in sockets]
+    finally:
+        for listener in sockets:
+            listener.close()
 
 
 def _wait_for(url: str, timeout: int = 60, interval: float = 2.0) -> bool:
@@ -32,7 +45,7 @@ def _wait_for(url: str, timeout: int = 60, interval: float = 2.0) -> bool:
 
 
 @pytest.mark.integration
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(600)
 class TestDockerComposeStack:
     """Tests that start the full docker-compose stack and probe its endpoints.
 
@@ -43,57 +56,113 @@ class TestDockerComposeStack:
     """
 
     @pytest.fixture(scope="class", autouse=True)
-    def compose_stack(self) -> Generator[None]:
+    @classmethod
+    def compose_stack(cls) -> Generator[dict[str, str]]:
         """Start the dashboards stack, yield, then tear it down."""
         import subprocess
 
-        docker_cmd = ["docker", "compose", "--profile", "dashboards", "up", "-d", "--build"]
+        api_port, prometheus_port, grafana_port = _get_free_ports(3)
+        endpoints = {
+            "api": f"http://127.0.0.1:{api_port}",
+            "prometheus": f"http://127.0.0.1:{prometheus_port}",
+            "grafana": f"http://127.0.0.1:{grafana_port}",
+        }
+        compose_env = os.environ.copy()
+        compose_env.update(
+            {
+                "NET_SENTRY_PUBLISHED_PORT": str(api_port),
+                "PROMETHEUS_PUBLISHED_PORT": str(prometheus_port),
+                "GRAFANA_PUBLISHED_PORT": str(grafana_port),
+            }
+        )
+        compose_base = [
+            "docker",
+            "compose",
+            "--project-name",
+            COMPOSE_PROJECT,
+            "--profile",
+            "dashboards",
+        ]
+
+        def run_compose(*args: str, timeout: int) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [*compose_base, *args],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=compose_env,
+                timeout=timeout,
+            )
+
+        def cleanup() -> subprocess.CompletedProcess[str]:
+            return run_compose("down", "-v", "--remove-orphans", timeout=90)
+
         try:
-            result = subprocess.run(docker_cmd, capture_output=True, text=True, timeout=180)
+            availability = subprocess.run(
+                ["docker", "info"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+            )
         except FileNotFoundError:
             pytest.skip("docker compose not available on this host")
         except subprocess.TimeoutExpired:
-            pytest.skip("docker compose up timed out")
+            pytest.skip("Docker daemon availability check timed out")
+
+        if availability.returncode != 0:
+            pytest.skip(f"Docker daemon not available: {availability.stderr}")
+
+        try:
+            result = run_compose("up", "-d", "--build", timeout=480)
+        except subprocess.TimeoutExpired:
+            cleanup()
+            pytest.fail("docker compose up timed out after 480 seconds")
 
         if result.returncode != 0:
-            pytest.skip(f"docker compose up failed: {result.stderr}")
+            cleanup()
+            pytest.fail(f"docker compose up failed:\n{result.stdout}\n{result.stderr}")
 
-        yield
+        try:
+            yield endpoints
+        finally:
+            teardown = cleanup()
+            if teardown.returncode != 0:
+                pytest.fail(f"docker compose teardown failed:\n{teardown.stdout}\n{teardown.stderr}")
 
-        subprocess.run(
-            ["docker", "compose", "--profile", "dashboards", "down", "-v", "--remove-orphans"],
-            capture_output=True,
-            timeout=60,
-        )
-
-    def test_api_health_endpoint(self) -> None:
+    def test_api_health_endpoint(self, compose_stack: dict[str, str]) -> None:
         """The Net Sentry API health endpoint returns 200."""
-        assert _wait_for(f"{API_BASE}/api/v1/health", timeout=60), "API did not come up in time"
-        resp = requests.get(f"{API_BASE}/api/v1/health", timeout=10)
+        api_base = compose_stack["api"]
+        assert _wait_for(f"{api_base}/api/v1/health", timeout=60), "API did not come up in time"
+        resp = requests.get(f"{api_base}/api/v1/health", timeout=10)
         assert resp.status_code == 200
         data = resp.json()
-        assert data.get("status") == "ok"
+        assert data.get("status") == "healthy"
 
-    def test_api_metrics_endpoint(self) -> None:
+    def test_api_metrics_endpoint(self, compose_stack: dict[str, str]) -> None:
         """The Prometheus /metrics endpoint is reachable."""
-        resp = requests.get(f"{API_BASE}/metrics", timeout=10)
+        resp = requests.get(f"{compose_stack['api']}/metrics", timeout=10)
         assert resp.status_code == 200
         assert "net_sentry" in resp.text
 
-    def test_api_dashboard_renders(self) -> None:
-        """The HTMX dashboard renders without a 5xx error."""
-        resp = requests.get(f"{API_BASE}/", timeout=10)
+    def test_api_dashboard_renders(self, compose_stack: dict[str, str]) -> None:
+        """The dashboard renders without a 5xx error."""
+        resp = requests.get(f"{compose_stack['api']}/", timeout=10)
         assert resp.status_code == 200
         assert "Net Sentry" in resp.text
 
-    def test_prometheus_accessible(self) -> None:
+    def test_prometheus_accessible(self, compose_stack: dict[str, str]) -> None:
         """Prometheus is accessible and the ready endpoint returns 200."""
-        assert _wait_for(f"{PROMETHEUS_BASE}/-/ready", timeout=60), "Prometheus did not come up in time"
-        resp = requests.get(f"{PROMETHEUS_BASE}/-/ready", timeout=10)
+        prometheus_base = compose_stack["prometheus"]
+        assert _wait_for(f"{prometheus_base}/-/ready", timeout=60), "Prometheus did not come up in time"
+        resp = requests.get(f"{prometheus_base}/-/ready", timeout=10)
         assert resp.status_code == 200
 
-    def test_grafana_accessible(self) -> None:
+    def test_grafana_accessible(self, compose_stack: dict[str, str]) -> None:
         """Grafana is accessible (login page returns 200)."""
-        assert _wait_for(f"{GRAFANA_BASE}/login", timeout=90), "Grafana did not come up in time"
-        resp = requests.get(f"{GRAFANA_BASE}/login", timeout=10)
+        grafana_base = compose_stack["grafana"]
+        assert _wait_for(f"{grafana_base}/login", timeout=90), "Grafana did not come up in time"
+        resp = requests.get(f"{grafana_base}/login", timeout=10)
         assert resp.status_code == 200

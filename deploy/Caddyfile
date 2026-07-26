@@ -1,0 +1,29 @@
+{
+	admin off
+	email {$ACME_EMAIL}
+}
+
+{$NET_SENTRY_PUBLIC_HOST} {
+	encode zstd gzip
+
+	reverse_proxy net-sentry:8000 {
+		health_uri /api/v1/health
+		health_interval 30s
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 30s
+		}
+	}
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

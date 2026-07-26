@@ -1,0 +1,73 @@
+services:
+  net-sentry:
+    environment:
+      - NET_SENTRY_AUTH_ENABLED=true
+      - NET_SENTRY_COOKIE_SECURE=true
+      - NET_SENTRY_PROXY_HEADERS=true
+      - NET_SENTRY_FORWARDED_ALLOW_IPS=${NET_SENTRY_PROXY_CIDR:-172.31.255.0/24}
+      - NET_SENTRY_ALLOWED_HOSTS=${NET_SENTRY_PUBLIC_HOST:?Set NET_SENTRY_PUBLIC_HOST},localhost,127.0.0.1,net-sentry
+      - NET_SENTRY_CORS_ORIGINS=${NET_SENTRY_CORS_ORIGINS:?Set NET_SENTRY_CORS_ORIGINS to the exact HTTPS origin}
+      - NET_SENTRY_JWT_SECRET_FILE=/run/secrets/net_sentry_jwt_secret
+      - NET_SENTRY_API_USERS_JSON_FILE=/run/secrets/net_sentry_api_users
+    secrets:
+      - net_sentry_jwt_secret
+      - net_sentry_api_users
+    networks:
+      - net_sentry_proxy
+      - net_sentry_app_egress
+
+  caddy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    profiles: [production]
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    depends_on:
+      net-sentry:
+        condition: service_healthy
+    ports:
+      - "${CADDY_BIND_ADDRESS:-0.0.0.0}:${CADDY_HTTP_PUBLISHED_PORT:-80}:80"
+      - "${CADDY_BIND_ADDRESS:-0.0.0.0}:${CADDY_HTTPS_PUBLISHED_PORT:-443}:443"
+    environment:
+      - NET_SENTRY_PUBLIC_HOST=${NET_SENTRY_PUBLIC_HOST:?Set NET_SENTRY_PUBLIC_HOST}
+      - ACME_EMAIL=${ACME_EMAIL:?Set ACME_EMAIL}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - net_sentry_proxy
+      - net_sentry_edge
+    cap_drop:
+      - ALL
+    cap_add:
+      # The official Caddy binary is marked cap_net_bind_service=ep. Keeping
+      # only that capability in the bounding set is required for exec and for
+      # non-root binding to 80/443.
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+
+secrets:
+  net_sentry_jwt_secret:
+    file: ${NET_SENTRY_JWT_SECRET_HOST_FILE:-./secrets/net_sentry_jwt_secret.txt}
+  net_sentry_api_users:
+    file: ${NET_SENTRY_API_USERS_HOST_FILE:-./secrets/net_sentry_api_users.json}
+
+networks:
+  net_sentry_proxy:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${NET_SENTRY_PROXY_CIDR:-172.31.255.0/24}
+  net_sentry_app_egress:
+  net_sentry_edge:
+
+volumes:
+  caddy_data:
+  caddy_config:
