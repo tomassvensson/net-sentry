@@ -8,11 +8,11 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from alembic import command
 from alembic.config import Config
 from sqlalchemy import Column, Engine, create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from alembic import command
 from src.models import Base
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,6 @@ Create Date: 2026-04-24 00:00:00.000000
 """
 
 import sqlalchemy as sa
-
 from alembic import op
 
 revision = "003_port_scan_network_segment"

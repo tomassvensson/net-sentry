@@ -6,7 +6,6 @@ Create Date: 2025-01-01
 """
 
 import sqlalchemy as sa
-
 from alembic import op
 
 revision = "006_device_notes_photo"

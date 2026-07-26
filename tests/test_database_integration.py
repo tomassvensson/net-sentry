@@ -291,10 +291,9 @@ class TestAlembicMigrationsPostgres:
     @pytest.mark.timeout(120)
     def test_alembic_upgrade_head(self, pg_container) -> None:
         """Alembic migrations should apply cleanly to a fresh PostgreSQL DB."""
+        from alembic import command
         from alembic.config import Config
         from sqlalchemy import create_engine, inspect
-
-        from alembic import command
 
         # Point Alembic at the container URL
         alembic_cfg = Config("alembic.ini")
@@ -322,10 +321,9 @@ class TestAlembicMigrationsPostgres:
     @pytest.mark.timeout(120)
     def test_alembic_downgrade_base(self, pg_container) -> None:
         """Alembic downgrade to base should remove all managed tables."""
+        from alembic import command
         from alembic.config import Config
         from sqlalchemy import create_engine, inspect
-
-        from alembic import command
 
         alembic_cfg = Config("alembic.ini")
         alembic_cfg.set_main_option("sqlalchemy.url", pg_container.get_connection_url())

@@ -6,7 +6,6 @@ Create Date: 2025-01-01
 """
 
 import sqlalchemy as sa
-
 from alembic import op
 
 revision = "007_fingerprint_confidence"
