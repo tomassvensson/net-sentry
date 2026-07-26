@@ -6,22 +6,6 @@
     <meta name="description" content="Net Sentry — track which WiFi, Bluetooth, and network devices are visible, when, and how strongly.">
     <title>Net Sentry Device Tracker</title>
     <link rel="icon" href="data:,">
-    <link rel="preconnect" href="https://unpkg.com" crossorigin>
-    <script src="/static/js/htmx.min.js" defer></script>
-    <script>
-        document.addEventListener("DOMContentLoaded", function () {
-            // Automatically send CSRF token with all HTMX mutating requests
-            document.body.addEventListener("htmx:configRequest", function (evt) {
-                var csrfToken = document.cookie.split("; ").reduce(function (acc, c) {
-                    var parts = c.split("=");
-                    return parts[0] === "csrftoken" ? parts[1] : acc;
-                }, "");
-                if (csrfToken) {
-                    evt.detail.headers["X-CSRFToken"] = csrfToken;
-                }
-            });
-        });
-    </script>
     <style>
         :root {
             --bg: #1a1a2e;
@@ -144,7 +128,7 @@
         .time-ago { color: var(--text-dim); font-size: 0.8rem; }
         #theme-toggle { cursor: pointer; background: none; border: none; font-size: 1.2rem; }
         .refresh-indicator { display: none; color: var(--accent); }
-        .htmx-request .refresh-indicator { display: inline; }
+        .controls.refreshing .refresh-indicator { display: inline; }
     </style>
 </head>
 <body>
@@ -158,10 +142,13 @@
         </div>
         <div class="controls">
             <span class="refresh-indicator">Refreshing...</span>
-            <button class="btn" hx-get="/api/v1/devices-table?page=1" hx-target="#device-table-body" hx-swap="innerHTML">
+            <button class="btn" id="refresh-button" type="button">
                 Refresh
             </button>
-            <button id="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">🌓</button>
+            {% if auth_enabled %}
+            <button class="btn" id="logout-button" type="button">Sign out</button>
+            {% endif %}
+            <button id="theme-toggle" type="button" aria-label="Toggle color theme">🌓</button>
         </div>
     </div>
 
@@ -180,10 +167,7 @@
                     <th>Scans</th>
                 </tr>
             </thead>
-            <tbody id="device-table-body"
-                   hx-get="/api/v1/devices-table?page=1"
-                   hx-trigger="every 30s"
-                   hx-swap="innerHTML">
+            <tbody id="device-table-body">
                 {% for item in devices %}
                 <tr>
                     <td><a href="/devices/{{ item.device.mac_address }}" style="color:inherit;text-decoration:underline dotted;"><code>{{ item.device.mac_address }}</code></a></td>
@@ -227,7 +211,7 @@
     </div>
     </main>
 
-    <script>
+    <script nonce="{{ request.state.csp_nonce }}">
         const _THEME_KEY = 'net-sentry-theme';
         function toggleTheme() {
             const html = document.documentElement;
@@ -237,7 +221,53 @@
         }
         // Restore saved theme (G: dark-mode persistence)
         const saved = localStorage.getItem(_THEME_KEY);
-        if (saved) document.documentElement.dataset.theme = saved;
+        if (saved) document.documentElement.setAttribute('data-theme', saved);
+
+        async function refreshDevices(url = '/api/v1/devices-table?page=1') {
+            const controls = document.querySelector('.controls');
+            const tableBody = document.getElementById('device-table-body');
+            controls.classList.add('refreshing');
+            try {
+                const response = await fetch(url, {credentials: 'same-origin'});
+                if (response.redirected) {
+                    window.location.assign(response.url);
+                    return;
+                }
+                if (!response.ok) throw new Error('Device refresh failed');
+                tableBody.innerHTML = await response.text();
+            } finally {
+                controls.classList.remove('refreshing');
+            }
+        }
+
+        document.getElementById('refresh-button').addEventListener('click', function () {
+            refreshDevices();
+        });
+        document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+        document.getElementById('device-table-body').addEventListener('click', function (event) {
+            const button = event.target.closest('[data-page-url]');
+            if (button) refreshDevices(button.dataset.pageUrl);
+        });
+        window.setInterval(refreshDevices, 30000);
+
+        function getCookie(name) {
+            const prefix = name + '=';
+            const match = document.cookie.split('; ').find((item) => item.startsWith(prefix));
+            return match ? decodeURIComponent(match.slice(prefix.length)) : '';
+        }
+
+        const logoutButton = document.getElementById('logout-button');
+        if (logoutButton) {
+            logoutButton.addEventListener('click', async function () {
+                const response = await fetch('/logout', {
+                    method: 'POST',
+                    headers: {'X-CSRFToken': getCookie('csrftoken')},
+                    credentials: 'same-origin',
+                    redirect: 'follow'
+                });
+                window.location.assign(response.url || '/login');
+            });
+        }
     </script>
 </body>
 </html>

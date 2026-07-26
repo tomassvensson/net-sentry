@@ -31,7 +31,10 @@ def engine():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(eng)
-    return eng
+    try:
+        yield eng
+    finally:
+        eng.dispose()
 
 
 @pytest.fixture()
@@ -42,7 +45,7 @@ def client(engine):
 
     set_engine(engine)
     app.dependency_overrides[get_db] = _override
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost") as c:
         yield c
     app.dependency_overrides.clear()
     set_engine(None)

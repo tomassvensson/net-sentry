@@ -85,14 +85,41 @@ class TestBuildExporter:
 
 class TestInstrumentFastAPI:
     def test_instrument_fastapi_does_not_raise(self) -> None:
-        """instrument_fastapi should not raise even if already instrumented."""
-        from fastapi import FastAPI
+        """Enabled instrumentation handles included routes and CORS preflight."""
+        from fastapi import APIRouter, FastAPI
+        from fastapi.middleware.cors import CORSMiddleware
+        from fastapi.testclient import TestClient
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
         from src.tracing import instrument_fastapi
 
         tiny_app = FastAPI()
-        # Should not raise
-        instrument_fastapi(tiny_app)
+        router = APIRouter()
+
+        @router.get("/health")
+        def health() -> dict[str, str]:
+            return {"status": "ok"}
+
+        tiny_app.include_router(router)
+        tiny_app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["http://localhost"],
+            allow_methods=["GET"],
+        )
+        instrument_fastapi(tiny_app, enabled=True)
+
+        try:
+            with TestClient(tiny_app, base_url="http://localhost") as client:
+                response = client.options(
+                    "/health",
+                    headers={
+                        "Origin": "http://localhost",
+                        "Access-Control-Request-Method": "GET",
+                    },
+                )
+            assert response.status_code == 200
+        finally:
+            FastAPIInstrumentor.uninstrument_app(tiny_app)
 
 
 class TestTracingConfig:

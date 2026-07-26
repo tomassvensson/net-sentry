@@ -3,9 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ device.device_name or device.mac_address }} — BtWiFi</title>
+    <title>{{ device.device_name or device.mac_address }} — Net Sentry</title>
     <link rel="icon" href="data:,">
-    <script src="/static/js/htmx.min.js"></script>
     <style>
         :root {
             --bg: #1a1a2e;
@@ -92,7 +91,7 @@
         <div class="breadcrumb"><a href="/">← Back to Dashboard</a></div>
         <h1>Device Detail</h1>
     </div>
-    <button class="theme-btn">
+    <button class="theme-btn" type="button">
         Toggle theme
     </button>
 </div>
@@ -237,18 +236,28 @@
                     <th>Scan Count</th>
                 </tr>
             </thead>
-            <tbody id="windows-table-body"
-                   hx-get="/api/v1/devices/{{ device.mac_address }}/windows-table?page={{ page }}"
-                   hx-trigger="load"
-                   hx-swap="innerHTML">
+            <tbody id="windows-table-body">
                 {% include "windows_table.html" %}
             </tbody>
         </table>
     </div>
 </div>
 
-<script>
+<script nonce="{{ request.state.csp_nonce }}">
     const _THEME_KEY = 'net-sentry-theme';
+    function getCookie(name) {
+        const prefix = name + '=';
+        const match = document.cookie.split('; ').find((item) => item.startsWith(prefix));
+        return match ? decodeURIComponent(match.slice(prefix.length)) : '';
+    }
+    function authenticatedMutationOptions(method, body) {
+        return {
+            method: method,
+            body: body,
+            credentials: 'same-origin',
+            headers: {'X-CSRFToken': getCookie('csrftoken')}
+        };
+    }
     function toggleTheme() {
         const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
         document.documentElement.dataset.theme = next;
@@ -262,11 +271,22 @@
         const btn = document.querySelector('.theme-btn');
         if (btn) btn.onclick = toggleTheme;
 
+        document.getElementById('windows-table-body').addEventListener('click', async function(event) {
+            const button = event.target.closest('[data-page-url]');
+            if (!button) return;
+            const response = await fetch(button.dataset.pageUrl, {credentials: 'same-origin'});
+            if (response.redirected) {
+                window.location.assign(response.url);
+                return;
+            }
+            if (response.ok) this.innerHTML = await response.text();
+        });
+
         // Save label + notes (D)
         const saveBtn = document.getElementById('save-notes-btn');
         if (saveBtn) {
             saveBtn.addEventListener('click', async function() {
-                const mac = '{{ device.mac_address }}';
+                const mac = {{ device.mac_address | tojson }};
                 const label = document.getElementById('label-input').value;
                 const notes = document.getElementById('notes-input').value;
                 const fd = new FormData();
@@ -274,7 +294,10 @@
                 fd.append('notes', notes);
                 const status = document.getElementById('notes-status');
                 try {
-                    const resp = await fetch('/api/v1/devices/' + encodeURIComponent(mac) + '/notes', {method: 'PATCH', body: fd});
+                    const resp = await fetch(
+                        '/api/v1/devices/' + encodeURIComponent(mac) + '/notes',
+                        authenticatedMutationOptions('PATCH', fd)
+                    );
                     if (resp.ok) { status.textContent = 'Saved.'; status.style.color = 'var(--success)'; }
                     else { const j = await resp.json(); status.textContent = 'Error: ' + (j.detail || resp.status); status.style.color = 'var(--accent)'; }
                 } catch(e) { console.error(e); status.textContent = 'Network error.'; status.style.color = 'var(--accent)'; }
@@ -286,14 +309,17 @@
         const uploadBtn = document.getElementById('upload-photo-btn');
         if (uploadBtn) {
             uploadBtn.addEventListener('click', async function() {
-                const mac = '{{ device.mac_address }}';
+                const mac = {{ device.mac_address | tojson }};
                 const fileInput = document.getElementById('photo-input');
                 if (!fileInput.files.length) { return; }
                 const fd = new FormData();
                 fd.append('photo', fileInput.files[0]);
                 const status = document.getElementById('photo-status');
                 try {
-                    const resp = await fetch('/api/v1/devices/' + encodeURIComponent(mac) + '/photo', {method: 'POST', body: fd});
+                    const resp = await fetch(
+                        '/api/v1/devices/' + encodeURIComponent(mac) + '/photo',
+                        authenticatedMutationOptions('POST', fd)
+                    );
                     if (resp.ok) { status.textContent = 'Uploaded — reload to see photo.'; status.style.color = 'var(--success)'; }
                     else { const j = await resp.json(); status.textContent = 'Error: ' + (j.detail || resp.status); status.style.color = 'var(--accent)'; }
                 } catch(e) { console.error(e); status.textContent = 'Network error.'; status.style.color = 'var(--accent)'; }

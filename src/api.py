@@ -1,9 +1,9 @@
 """FastAPI application for Net Sentry device dashboard and REST API.
 
 Provides:
-- HTMX-powered web dashboard at /
+- Dependency-free live web dashboard at /
 - REST API at /api/v1/ for device history and management
-- Prometheus metrics at /metrics (GET, no auth required)
+- Prometheus metrics at /metrics (protected when authentication is enabled)
 - Health check at /api/v1/health
 - JWT auth on /api/v1/* when api.auth_enabled=true (default: disabled)
 - CORS middleware (configurable via api.cors_origins in config)
@@ -15,6 +15,8 @@ import csv
 import io
 import json
 import logging
+import re
+import secrets
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, suppress
@@ -24,7 +26,15 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from prometheus_client import generate_latest
@@ -34,12 +44,24 @@ from slowapi.util import get_remote_address
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
 from starlette.types import ASGIApp
 
-from src.auth import configure_auth, require_auth
+from src.auth import (
+    ACCESS_COOKIE_NAME,
+    authenticate_user,
+    configure_auth,
+    get_jwt_expire_minutes,
+    is_auth_enabled,
+    is_cookie_secure,
+    issue_access_token,
+    require_auth,
+    require_ui_auth,
+)
 from src.database import get_session, init_database, purge_old_windows
+from src.export_utils import sanitize_csv_value
 from src.models import Device, VisibilityWindow
 from src.tracing import instrument_fastapi
 
@@ -51,6 +73,11 @@ templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
 
 # Module-level engine reference (set during lifespan)
 _engine = None
+_runtime_config: Any = None
+_app_configured = False
+_cors_origins = ["http://localhost", "http://127.0.0.1"]
+_allowed_hosts = ["localhost", "127.0.0.1", "testserver"]
+_PHOTOS_DIR = Path("data/photos")
 
 # Shared string constants
 _DEVICE_NOT_FOUND = "Device not found"
@@ -68,18 +95,39 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: StarletteRequest, call_next: Any) -> StarletteResponse:
         """Add security headers to the response."""
+        nonce = secrets.token_urlsafe(18)
+        request.state.csp_nonce = nonce
         response: StarletteResponse = await call_next(request)
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        if request.url.path.startswith(("/docs", "/redoc")):
+            script_policy = "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net"
+            style_policy = "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net"
+        else:
+            script_policy = f"script-src 'self' 'nonce-{nonce}'"
+            style_policy = "style-src 'self' 'unsafe-inline'"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; "
-            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            f"{script_policy}; "
+            f"{style_policy}; "
             "img-src 'self' data: https://fastapi.tiangolo.com; "
-            "font-src 'self' data: https://cdn.jsdelivr.net;"
+            "font-src 'self' data:; "
+            "connect-src 'self'; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "frame-ancestors 'none'; "
+            "form-action 'self'"
         )
+        if request.url.path.startswith("/media/photos/"):
+            response.headers.setdefault("Cache-Control", "private, max-age=3600")
+        elif not request.url.path.startswith("/static/"):
+            response.headers.setdefault("Cache-Control", "no-store")
+        if request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 
 
@@ -88,7 +136,8 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: StarletteRequest, call_next: Any) -> StarletteResponse:
         """Read or generate a request ID and add it to the response."""
-        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        supplied_id = request.headers.get("X-Request-ID", "")
+        request_id = supplied_id if re.fullmatch(r"[A-Za-z0-9._-]{1,128}", supplied_id) else str(uuid.uuid4())
         request.state.request_id = request_id
         response: StarletteResponse = await call_next(request)
         response.headers["X-Request-ID"] = request_id
@@ -98,7 +147,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 _CSRF_COOKIE_NAME = "csrftoken"
 _CSRF_HEADER_NAME = "X-CSRFToken"
 _CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-_CSRF_PROTECTED_PATHS = "/api/v1/"
+_CSRF_EXEMPT_PATHS = {"/api/v1/auth/token"}
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):
@@ -106,7 +155,25 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: StarletteRequest, call_next: Any) -> StarletteResponse:
         """Validate CSRF token on mutating requests, set cookie on all responses."""
-        if request.method in _CSRF_PROTECTED_METHODS and request.url.path.startswith(_CSRF_PROTECTED_PATHS):
+        if request.method == "POST" and request.url.path == "/login":
+            origin = request.headers.get("Origin")
+            expected_origin = f"{request.url.scheme}://{request.headers.get('host', '')}"
+            if origin and not _constant_time_compare(origin.rstrip("/"), expected_origin.rstrip("/")):
+                return StarletteResponse(
+                    content='{"detail":"Cross-origin login rejected"}',
+                    status_code=403,
+                    media_type="application/json",
+                )
+
+        bearer_auth = request.headers.get("Authorization", "").lower().startswith("bearer ")
+        protected_path = request.url.path.startswith("/api/v1/") or request.url.path == "/logout"
+        requires_csrf = (
+            request.method in _CSRF_PROTECTED_METHODS
+            and protected_path
+            and request.url.path not in _CSRF_EXEMPT_PATHS
+            and not bearer_auth
+        )
+        if requires_csrf:
             cookie_token = request.cookies.get(_CSRF_COOKIE_NAME)
             header_token = request.headers.get(_CSRF_HEADER_NAME)
             if not cookie_token or not header_token or not _constant_time_compare(cookie_token, header_token):
@@ -118,8 +185,59 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         response: StarletteResponse = await call_next(request)
         if _CSRF_COOKIE_NAME not in request.cookies:
             token = str(uuid.uuid4())
-            response.set_cookie(_CSRF_COOKIE_NAME, token, httponly=False, samesite="strict")
+            response.set_cookie(
+                _CSRF_COOKIE_NAME,
+                token,
+                httponly=False,
+                secure=is_cookie_secure(),
+                samesite="strict",
+                path="/",
+            )
         return response
+
+
+class ConfigurableCORSMiddleware:
+    """CORS wrapper whose policy can be updated before or during lifespan startup."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+        self._signature: tuple[str, ...] = ()
+        self._middleware: ASGIApp | None = None
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        signature = tuple(_cors_origins)
+        if self._middleware is None or signature != self._signature:
+            self._signature = signature
+            self._middleware = CORSMiddleware(
+                self.app,
+                allow_origins=list(signature),
+                allow_credentials=True,
+                allow_methods=["GET", "POST", "PATCH", "DELETE"],
+                allow_headers=["Authorization", "Content-Type", _CSRF_HEADER_NAME],
+            )
+        middleware = self._middleware
+        await middleware(scope, receive, send)
+
+
+class ConfigurableTrustedHostMiddleware:
+    """Trusted-host wrapper whose allowlist follows runtime configuration."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+        self._signature: tuple[str, ...] = ()
+        self._middleware: ASGIApp | None = None
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        signature = tuple(_allowed_hosts)
+        if self._middleware is None or signature != self._signature:
+            self._signature = signature
+            self._middleware = TrustedHostMiddleware(
+                self.app,
+                allowed_hosts=list(signature),
+                www_redirect=False,
+            )
+        middleware = self._middleware
+        await middleware(scope, receive, send)
 
 
 def _constant_time_compare(a: str, b: str) -> bool:
@@ -135,22 +253,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     import asyncio
 
     global _engine  # noqa: PLW0603
+    owned_engine = None
+    if not _app_configured:
+        from src.config import load_config
+
+        configure_app(load_config())
+
     if _engine is None:
-        try:
-            _engine = init_database()
-        except Exception:
-            logger.exception("Failed to initialize database in API lifespan")
+        database_url = _runtime_config.database.url if _runtime_config is not None else None
+        owned_engine = init_database(database_url)
+        _engine = owned_engine
     logger.info("API server started, database initialized")
 
     # Start background data-retention/vacuum job
     task = asyncio.create_task(_retention_task())
 
-    yield
-
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task
-    logger.info("API server shutting down")
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        if owned_engine is not None:
+            owned_engine.dispose()
+            if _engine is owned_engine:
+                _engine = None
+        logger.info("API server shutting down")
 
 
 async def _retention_task() -> None:
@@ -163,9 +291,9 @@ async def _retention_task() -> None:
         if _engine is None:
             continue
         try:
-            from src.config import load_config
-
-            cfg = load_config()
+            cfg = _runtime_config
+            if cfg is None:
+                continue
             retention_days = cfg.database.retention_days
             if retention_days > 0:
                 deleted = purge_old_windows(_engine, retention_days)
@@ -188,25 +316,26 @@ def configure_app(config: Any) -> None:
     Args:
         config: AppConfig instance.
     """
+    global _allowed_hosts, _app_configured, _cors_origins, _runtime_config, _PHOTOS_DIR  # noqa: PLW0603
+
+    from src.config import validate_config
+
+    validate_config(config)
     configure_auth(
         enabled=config.api.auth_enabled,
         secret=config.api.jwt_secret,
         algorithm=config.api.jwt_algorithm,
         expire_minutes=config.api.jwt_expire_minutes,
         users=config.api.api_users,
+        cookie_secure=config.api.cookie_secure,
     )
-    # Rebuild CORS middleware with the configured origins.
-    # FastAPI middleware stack is built at startup; we add CORS once here.
-    # For tests the defaults (allow localhost) are fine.
-    origins = config.api.cors_origins or ["http://localhost", "http://127.0.0.1"]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=True,
-        allow_methods=["GET", "POST"],
-        allow_headers=["Authorization", "Content-Type"],
-    )
-    logger.info("CORS origins: %s", origins)
+    _cors_origins = list(config.api.cors_origins or ["http://localhost", "http://127.0.0.1"])
+    _allowed_hosts = list(config.api.allowed_hosts)
+    _PHOTOS_DIR = Path(config.api.photo_directory).expanduser().resolve()
+    _runtime_config = config
+    _app_configured = True
+    instrument_fastapi(app, enabled=config.tracing.enabled)
+    logger.info("CORS origins: %s", _cors_origins)
 
 
 app = FastAPI(
@@ -214,29 +343,30 @@ app = FastAPI(
     description="Track WiFi and Bluetooth device visibility over time",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
-
-# Attach OpenTelemetry instrumentation (no-op if tracing not configured)
-instrument_fastapi(app)
 
 # Register rate-limit exceeded handler
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
+# Reject untrusted Host headers before requests reach application routes.
+app.add_middleware(ConfigurableTrustedHostMiddleware)
 # Add security headers middleware
 app.add_middleware(SecurityHeadersMiddleware)
 # Add correlation ID middleware
 app.add_middleware(RequestIdMiddleware)
 # Add CSRF protection middleware
 app.add_middleware(CSRFMiddleware)
+# Add runtime-configurable CORS as the outermost application middleware
+app.add_middleware(ConfigurableCORSMiddleware)
 
 # Serve static files if directory exists
 _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
-
-# Photos upload directory (created on first use)
-_PHOTOS_DIR = _STATIC_DIR / "photos"
 
 
 def get_db() -> Generator[Session]:
@@ -250,6 +380,29 @@ def get_db() -> Generator[Session]:
 # Reusable dependency type aliases (Annotated pattern — FastAPI best practice)
 DbSession = Annotated[Session, Depends(get_db)]
 AuthUser = Annotated[str | None, Depends(require_auth)]
+UiAuthUser = Annotated[str | None, Depends(require_ui_auth)]
+
+
+# ---------------------------------------------------------------------------
+# Auth-aware API documentation
+# ---------------------------------------------------------------------------
+@app.get("/openapi.json", include_in_schema=False)
+def openapi_schema(_user: str | None = Depends(require_auth)) -> JSONResponse:
+    """Serve the API schema only to authorized users when auth is enabled."""
+    return JSONResponse(app.openapi())
+
+
+@app.get("/docs", include_in_schema=False)
+def swagger_docs(_user: str | None = Depends(require_auth)) -> HTMLResponse:
+    """Serve Swagger UI behind the same authentication policy as the API."""
+    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - Swagger UI")
+
+
+@app.get("/redoc", include_in_schema=False)
+def redoc_docs(_user: str | None = Depends(require_auth)) -> HTMLResponse:
+    """Serve ReDoc behind the same authentication policy as the API."""
+    return get_redoc_html(openapi_url="/openapi.json", title=f"{app.title} - ReDoc")
+
 
 # ---------------------------------------------------------------------------
 # API v1 router
@@ -293,13 +446,79 @@ def health_check() -> dict[str, Any]:
 # Prometheus metrics
 # ---------------------------------------------------------------------------
 @app.get("/metrics", response_class=PlainTextResponse)
-def prometheus_metrics() -> str:
+def prometheus_metrics(_user: str | None = Depends(require_auth)) -> str:
     """Expose Prometheus metrics.
 
     Returns:
         Prometheus text-format metrics.
     """
     return generate_latest().decode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Browser authentication
+# ---------------------------------------------------------------------------
+def _safe_local_redirect(value: str | None) -> str:
+    """Allow only same-origin absolute paths as post-login destinations."""
+    if not value or not value.startswith("/") or value.startswith("//"):
+        return "/"
+    return value
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next_url: str = Query("/", alias="next")) -> StarletteResponse:
+    """Render the browser login page."""
+    if not is_auth_enabled():
+        return RedirectResponse(url="/", status_code=303)
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context={"next_url": _safe_local_redirect(next_url), "error": None},
+    )
+
+
+@app.post("/login", response_class=HTMLResponse)
+@limiter.limit("5/minute")
+def browser_login(
+    request: Request,
+    username: str = Form(..., max_length=128),
+    password: str = Form(..., max_length=1024),
+    next_url: str = Form("/", alias="next"),
+) -> StarletteResponse:
+    """Authenticate a browser user and issue an HttpOnly session cookie."""
+    if not is_auth_enabled():
+        return RedirectResponse(url="/", status_code=303)
+    if not authenticate_user(username, password):
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context={"next_url": _safe_local_redirect(next_url), "error": "Incorrect username or password"},
+            status_code=401,
+        )
+
+    token = issue_access_token(username)
+    response = RedirectResponse(url=_safe_local_redirect(next_url), status_code=303)
+    response.set_cookie(
+        ACCESS_COOKIE_NAME,
+        token,
+        max_age=get_jwt_expire_minutes() * 60,
+        httponly=True,
+        secure=is_cookie_secure(),
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+
+@app.post("/logout")
+def browser_logout(
+    request: Request,
+    _user: str | None = Depends(require_ui_auth),
+) -> RedirectResponse:
+    """Clear the browser session cookie."""
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie(ACCESS_COOKIE_NAME, path="/", secure=is_cookie_secure(), samesite="strict")
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +582,7 @@ def get_device(
     """
     device = session.query(Device).filter_by(mac_address=mac_address).first()
     if device is None:
-        return {"error": _DEVICE_NOT_FOUND, "mac_address": mac_address}
+        raise HTTPException(status_code=404, detail=_DEVICE_NOT_FOUND)
 
     latest_window = (
         session.query(VisibilityWindow)
@@ -424,8 +643,8 @@ def get_device_windows(
 def update_device_notes(
     request: Request,
     mac_address: str,
-    label: Annotated[str | None, Form()] = None,
-    notes: Annotated[str | None, Form()] = None,
+    label: Annotated[str | None, Form(max_length=255)] = None,
+    notes: Annotated[str | None, Form(max_length=4096)] = None,
     session: DbSession = None,  # type: ignore[assignment]
     _user: AuthUser = None,
 ) -> dict[str, Any]:
@@ -445,15 +664,33 @@ def update_device_notes(
     if device is None:
         raise HTTPException(status_code=404, detail=_DEVICE_NOT_FOUND)
     if label is not None:
-        device.label = label[:255] if label else None
+        device.label = label or None
     if notes is not None:
         device.notes = notes or None
     session.commit()
     return {"mac_address": mac_address, "label": device.label, "notes": device.notes}
 
 
-_ALLOWED_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 _MAX_PHOTO_BYTES = 10 * 1024 * 1024  # 10 MB
+_PHOTO_MEDIA_TYPES = {
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+def _detect_image_extension(header: bytes) -> str | None:
+    """Identify supported image formats from file signatures."""
+    if header.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if header.startswith((b"GIF87a", b"GIF89a")):
+        return ".gif"
+    if len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WEBP":
+        return ".webp"
+    return None
 
 
 @v1.post(
@@ -474,8 +711,8 @@ async def upload_device_photo(
 ) -> dict[str, Any]:
     """Upload an optional photo for a device.
 
-    Stores the file under ``static/photos/`` using a UUID filename to
-    prevent path-traversal attacks.  Only image extensions are accepted.
+    Stores the file under the configured data directory using a UUID filename.
+    Content is validated by file signature rather than trusting its extension.
 
     Args:
         request: FastAPI request.
@@ -490,22 +727,26 @@ async def upload_device_photo(
     if device is None:
         raise HTTPException(status_code=404, detail=_DEVICE_NOT_FOUND)
 
-    original_name = photo.filename or ""
-    suffix = Path(original_name).suffix.lower()
-    if suffix not in _ALLOWED_PHOTO_EXTENSIONS:
-        raise HTTPException(
-            status_code=415,
-            detail=f"Unsupported file type '{suffix}'. Allowed: {sorted(_ALLOWED_PHOTO_EXTENSIONS)}",
-        )
+    first_chunk = await photo.read(65536)
+    suffix = _detect_image_extension(first_chunk)
+    if suffix is None:
+        raise HTTPException(status_code=415, detail="Uploaded content is not a supported JPEG, PNG, GIF, or WebP image")
+
+    supplied_suffix = Path(photo.filename or "").suffix.lower()
+    if supplied_suffix == ".jpeg":
+        supplied_suffix = ".jpg"
+    if supplied_suffix and supplied_suffix != suffix:
+        raise HTTPException(status_code=415, detail="Filename extension does not match the uploaded image content")
 
     _PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
-    # Use UUID filename to prevent path-traversal
     safe_filename = f"{uuid.uuid4()}{suffix}"
     dest = _PHOTOS_DIR / safe_filename
 
-    # Stream upload to disk, enforce size limit
-    bytes_written = 0
+    bytes_written = len(first_chunk)
+    if bytes_written > _MAX_PHOTO_BYTES:
+        raise HTTPException(status_code=413, detail="Photo exceeds 10 MB limit")
     with dest.open("wb") as out_file:
+        out_file.write(first_chunk)
         while chunk := await photo.read(65536):
             bytes_written += len(chunk)
             if bytes_written > _MAX_PHOTO_BYTES:
@@ -515,14 +756,28 @@ async def upload_device_photo(
 
     # Remove old photo if it exists
     if device.photo_path:
-        old_file = _STATIC_DIR / device.photo_path.removeprefix("/static/").lstrip("/")
+        old_file = (_PHOTOS_DIR / Path(device.photo_path).name).resolve()
         if old_file.exists() and old_file.is_relative_to(_PHOTOS_DIR):
             old_file.unlink(missing_ok=True)
 
-    relative_url = f"/static/photos/{safe_filename}"
+    relative_url = f"/media/photos/{safe_filename}"
     device.photo_path = relative_url
     session.commit()
     return {"photo_url": relative_url}
+
+
+@app.get("/media/photos/{filename}", response_class=FileResponse)
+def get_device_photo(
+    filename: str,
+    _user: str | None = Depends(require_ui_auth),
+) -> FileResponse:
+    """Serve an uploaded photo only to authenticated dashboard users."""
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}\.(?:jpg|png|gif|webp)", filename):
+        raise HTTPException(status_code=404, detail="Photo not found")
+    path = (_PHOTOS_DIR / filename).resolve()
+    if not path.is_relative_to(_PHOTOS_DIR) or not path.is_file():
+        raise HTTPException(status_code=404, detail="Photo not found")
+    return FileResponse(path, media_type=_PHOTO_MEDIA_TYPES[path.suffix.lower()])
 
 
 # ---------------------------------------------------------------------------
@@ -571,11 +826,15 @@ def get_summary(
 
 
 # ---------------------------------------------------------------------------
-# Dashboard (HTMX)
+# Dashboard
 # ---------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, session: DbSession = None) -> HTMLResponse:  # type: ignore[assignment]
-    """Render the HTMX-powered dashboard.
+def dashboard(
+    request: Request,
+    session: DbSession = None,  # type: ignore[assignment]
+    _user: UiAuthUser = None,
+) -> HTMLResponse:
+    """Render the live dashboard.
 
     Args:
         request: FastAPI request.
@@ -604,6 +863,7 @@ def dashboard(request: Request, session: DbSession = None) -> HTMLResponse:  # t
             "total_devices": total_devices,
             "devices": device_list,
             "now": datetime.now(UTC),
+            "auth_enabled": is_auth_enabled(),
         },
     )
 
@@ -613,8 +873,9 @@ def devices_table_fragment(
     request: Request,
     page: Annotated[int, Query(ge=1)] = 1,
     session: DbSession = None,  # type: ignore[assignment]
+    _user: UiAuthUser = None,
 ) -> HTMLResponse:
-    """HTMX fragment: device table rows for live updates.
+    """HTML fragment: device table rows for live updates.
 
     Args:
         request: FastAPI request.
@@ -663,6 +924,7 @@ def device_detail_page(
     mac_address: str,
     page: Annotated[int, Query(ge=1)] = 1,
     session: DbSession = None,  # type: ignore[assignment]
+    _user: UiAuthUser = None,
 ) -> HTMLResponse:
     """Render the device detail page showing all visibility windows.
 
@@ -696,7 +958,9 @@ def device_detail_page(
             "page": page,
             "pages": pages,
             "total_windows": total_windows,
+            "mac_address": device.mac_address,
             "now": datetime.now(UTC),
+            "auth_enabled": is_auth_enabled(),
         },
     )
 
@@ -707,6 +971,7 @@ def device_timeline_page(
     mac_address: str,
     gap_minutes: Annotated[int, Query(ge=1, le=10080, description="Gap threshold in minutes.")] = 60,
     session: DbSession = None,  # type: ignore[assignment]
+    _user: UiAuthUser = None,
 ) -> HTMLResponse:
     """Render the device timeline page showing visibility gaps and windows visually.
 
@@ -759,6 +1024,7 @@ def device_timeline_page(
             "first_seen": windows[0].first_seen if windows else None,
             "last_seen": windows[-1].last_seen if windows else None,
             "now": datetime.now(UTC),
+            "auth_enabled": is_auth_enabled(),
         },
     )
 
@@ -773,8 +1039,9 @@ def windows_table_fragment(
     mac_address: str,
     page: Annotated[int, Query(ge=1)] = 1,
     session: DbSession = None,  # type: ignore[assignment]
+    _user: UiAuthUser = None,
 ) -> HTMLResponse:
-    """HTMX fragment: visibility windows table rows for a device.
+    """HTML fragment: visibility windows table rows for a device.
 
     Args:
         request: FastAPI request.
@@ -812,14 +1079,12 @@ def windows_table_fragment(
 @limiter.limit("5/minute")  # Tight limit to mitigate brute-force attacks
 def login(
     request: Request,
-    username: Annotated[str, Form()],
-    password: Annotated[str, Form()],
+    username: Annotated[str, Form(max_length=128)],
+    password: Annotated[str, Form(max_length=1024)],
 ) -> dict[str, Any]:
     """Obtain a JWT access token (OAuth2 password flow).
 
-    Only available when ``api.auth_enabled=true``.  When auth is disabled
-    (default), this endpoint still responds but issues tokens that are
-    ignored by protected endpoints.
+    Only available when ``api.auth_enabled=true``.
 
     Args:
         request: FastAPI request (required by rate limiter).
@@ -829,28 +1094,15 @@ def login(
     Returns:
         ``{"access_token": "...", "token_type": "bearer"}``
     """
-    from src.auth import (
-        _jwt_algorithm,
-        _jwt_secret,
-        authenticate_user,
-        create_access_token,
-        get_jwt_expire_minutes,
-    )
-
+    if not is_auth_enabled():
+        raise HTTPException(status_code=404, detail="Authentication is disabled")
     if not authenticate_user(username, password):
-        from fastapi import HTTPException, status
-
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=401,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    token = create_access_token(
-        {"sub": username},
-        secret=_jwt_secret,
-        algorithm=_jwt_algorithm,
-        expires_minutes=get_jwt_expire_minutes(),
-    )
+    token = issue_access_token(username)
     return {"access_token": token, "token_type": "bearer"}
 
 
@@ -908,7 +1160,7 @@ def export_devices_csv(
     writer = csv.DictWriter(buf, fieldnames=_DEVICE_CSV_FIELDS, extrasaction="ignore")
     writer.writeheader()
     for d in devices:
-        writer.writerow({f: getattr(d, f, "") for f in _DEVICE_CSV_FIELDS})
+        writer.writerow({f: sanitize_csv_value(getattr(d, f, "")) for f in _DEVICE_CSV_FIELDS})
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]),
@@ -972,7 +1224,7 @@ def export_windows_csv(
     writer = csv.DictWriter(buf, fieldnames=_WINDOW_CSV_FIELDS, extrasaction="ignore")
     writer.writeheader()
     for w in windows:
-        writer.writerow({f: getattr(w, f, "") for f in _WINDOW_CSV_FIELDS})
+        writer.writerow({f: sanitize_csv_value(getattr(w, f, "")) for f in _WINDOW_CSV_FIELDS})
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]),

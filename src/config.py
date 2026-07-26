@@ -4,12 +4,16 @@ Loads configuration from a YAML file (config.yaml) with environment variable
 overrides. Provides sensible defaults for all settings.
 """
 
+import ipaddress
+import json
 import logging
 import os
+import re
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +110,7 @@ class PingSweepConfig:
     enabled: bool = False
     subnets: list[str] = field(default_factory=list)
     max_workers: int = 40
+    max_targets: int = 4096
     timeout_seconds: float = 1.0
     # Optional human-readable labels for subnets.  Keys are CIDR strings
     # matching entries in ``subnets``; values are short label strings
@@ -179,7 +184,7 @@ class OuiConfig:
 
     auto_update: bool = True
     update_interval_hours: int = 168  # 1 week
-    cache_file: str = "src/data/oui_cache.txt"
+    cache_file: str = "data/oui_cache.txt"
 
 
 @dataclass
@@ -219,12 +224,17 @@ class ApiConfig:
     """
 
     enabled: bool = True
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8000
     auth_enabled: bool = False
     jwt_secret: str = "change-me-in-production-use-env-var"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
+    cookie_secure: bool = False
+    proxy_headers: bool = False
+    forwarded_allow_ips: str = "127.0.0.1"
+    photo_directory: str = "data/photos"
+    allowed_hosts: list[str] = field(default_factory=lambda: ["localhost", "127.0.0.1", "testserver"])
     # username -> bcrypt-hashed password; add entries to protect the API.
     # Generate a hash: python -c "import bcrypt; print(bcrypt.hashpw(b'pass', bcrypt.gensalt()).decode())"
     api_users: dict[str, str] = field(default_factory=dict)
@@ -320,8 +330,9 @@ def load_config(config_path: str | None = None) -> AppConfig:
 
     config = _apply_env_overrides(config)
 
-    # Auto-generate JWT secret if still using the insecure placeholder
+    # Auto-generate JWT secret if auth is enabled and the placeholder remains.
     _maybe_rotate_jwt_secret(config, path)
+    validate_config(config)
 
     return config
 
@@ -340,6 +351,9 @@ def _maybe_rotate_jwt_secret(config: AppConfig, config_path: str) -> None:
         config: Loaded application configuration (mutated in place).
         config_path: Path to the config file to update.
     """
+    if not config.api.auth_enabled:
+        return
+
     # Respect an explicit env-var override — don't replace it.
     env_secret = os.environ.get("NET_SENTRY_JWT_SECRET") or os.environ.get("BTWIFI_JWT_SECRET")
     if env_secret:
@@ -355,11 +369,16 @@ def _maybe_rotate_jwt_secret(config: AppConfig, config_path: str) -> None:
         config_path,
     )
 
-    # Write back to the config file if it exists and can be updated
-    _write_jwt_secret_to_config(config_path, new_secret)
+    # A changing secret invalidates every browser/API session at restart, so
+    # refuse to continue unless it can be persisted.
+    if not _write_jwt_secret_to_config(config_path, new_secret):
+        raise ValueError(
+            "Authentication is enabled but the generated JWT secret could not be persisted. "
+            "Set NET_SENTRY_JWT_SECRET to a stable random value."
+        )
 
 
-def _write_jwt_secret_to_config(config_path: str, new_secret: str) -> None:
+def _write_jwt_secret_to_config(config_path: str, new_secret: str) -> bool:
     """Write the generated JWT secret back to the config YAML file.
 
     Performs a targeted line-by-line replacement to preserve all comments and
@@ -377,14 +396,14 @@ def _write_jwt_secret_to_config(config_path: str, new_secret: str) -> None:
         rel = resolved.relative_to(allowed_base)  # raises ValueError if outside cwd
     except ValueError:
         logger.warning("Refusing to write JWT secret: config path is outside the working directory: %s", config_path)
-        return
+        return False
     except (OSError, RuntimeError):
         logger.warning("Could not resolve config path: %s", config_path)
-        return
+        return False
 
     if resolved.suffix not in (".yaml", ".yml"):
         logger.warning("Refusing to write JWT secret to non-YAML file: %s", config_path)
-        return
+        return False
 
     # Reconstruct from the validated base using only the sanitised relative
     # path parts — none of the components come from user-controlled input.
@@ -392,7 +411,7 @@ def _write_jwt_secret_to_config(config_path: str, new_secret: str) -> None:
     safe_path = Path(str(allowed_base)).joinpath(*safe_parts)
 
     if not safe_path.exists():
-        return
+        return False
     try:
         content = safe_path.read_text(encoding="utf-8")
         lines = content.splitlines(keepends=True)
@@ -406,8 +425,10 @@ def _write_jwt_secret_to_config(config_path: str, new_secret: str) -> None:
                 updated_lines.append(line)
         safe_path.write_text("".join(updated_lines), encoding="utf-8")  # NOSONAR — cwd-bounded, suffix-checked
         logger.info("JWT secret written to %s.", config_path)
+        return True
     except OSError:
         logger.warning("Could not write generated JWT secret to %s (read-only filesystem?).", config_path)
+        return False
 
 
 def _parse_alert_rules(raw_rules: list) -> list[AlertRule]:
@@ -506,6 +527,7 @@ def _parse_raw_config(raw: dict) -> AppConfig:
             enabled=ps.get("enabled", config.ping_sweep.enabled),
             subnets=ps.get("subnets", config.ping_sweep.subnets),
             max_workers=ps.get("max_workers", config.ping_sweep.max_workers),
+            max_targets=ps.get("max_targets", config.ping_sweep.max_targets),
             timeout_seconds=ps.get("timeout_seconds", config.ping_sweep.timeout_seconds),
             subnet_labels=ps.get("subnet_labels", config.ping_sweep.subnet_labels),
         )
@@ -583,6 +605,11 @@ def _parse_raw_config(raw: dict) -> AppConfig:
             jwt_secret=ap.get("jwt_secret", config.api.jwt_secret),
             jwt_algorithm=ap.get("jwt_algorithm", config.api.jwt_algorithm),
             jwt_expire_minutes=ap.get("jwt_expire_minutes", config.api.jwt_expire_minutes),
+            cookie_secure=ap.get("cookie_secure", config.api.cookie_secure),
+            proxy_headers=ap.get("proxy_headers", config.api.proxy_headers),
+            forwarded_allow_ips=ap.get("forwarded_allow_ips", config.api.forwarded_allow_ips),
+            photo_directory=ap.get("photo_directory", config.api.photo_directory),
+            allowed_hosts=ap.get("allowed_hosts", config.api.allowed_hosts),
             api_users=ap.get("api_users", config.api.api_users),
             cors_origins=ap.get("cors_origins", config.api.cors_origins),
         )
@@ -652,6 +679,40 @@ def _env_int(primary: str, fallback: str) -> int | None:
         return None
 
 
+def _secret_value(
+    value_name: str,
+    file_name: str,
+    *,
+    legacy_name: str | None = None,
+) -> str | None:
+    """Load a secret from one direct environment variable or a referenced file."""
+    direct = os.environ.get(value_name)
+    if direct is None and legacy_name:
+        direct = os.environ.get(legacy_name)
+    file_path = os.environ.get(file_name)
+    if direct is not None and file_path:
+        raise ValueError(f"Set only one of {value_name} or {file_name}")
+    if not file_path:
+        return direct
+    try:
+        value = Path(file_path).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ValueError(f"Could not read {file_name}: {exc}") from exc
+    if not value:
+        raise ValueError(f"{file_name} points to an empty file")
+    return value
+
+
+def _env_bool(name: str, legacy_name: str | None = None) -> bool | None:
+    """Return an environment variable as a boolean."""
+    value = os.environ.get(name)
+    if value is None and legacy_name:
+        value = os.environ.get(legacy_name)
+    if value is None:
+        return None
+    return value.lower() in ("1", "true", "yes", "on")
+
+
 def _apply_env_overrides(config: AppConfig) -> AppConfig:
     """Apply environment variable overrides to configuration.
 
@@ -667,22 +728,149 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
     if db_url := os.environ.get("DATABASE_URL"):
         config.database.url = db_url
 
-    if jwt_secret := _env("NET_SENTRY_JWT_SECRET", "BTWIFI_JWT_SECRET"):
+    if jwt_secret := _secret_value(
+        "NET_SENTRY_JWT_SECRET",
+        "NET_SENTRY_JWT_SECRET_FILE",
+        legacy_name="BTWIFI_JWT_SECRET",
+    ):
         config.api.jwt_secret = jwt_secret
 
     if cors := _env("NET_SENTRY_CORS_ORIGINS", "BTWIFI_CORS_ORIGINS"):
         config.api.cors_origins = [o.strip() for o in cors.split(",") if o.strip()]
 
-    if auth_enabled := _env("NET_SENTRY_AUTH_ENABLED", "BTWIFI_AUTH_ENABLED"):
-        config.api.auth_enabled = auth_enabled.lower() in ("1", "true", "yes")
+    if allowed_hosts := os.environ.get("NET_SENTRY_ALLOWED_HOSTS"):
+        config.api.allowed_hosts = [host.strip() for host in allowed_hosts.split(",") if host.strip()]
+
+    if (auth_enabled := _env_bool("NET_SENTRY_AUTH_ENABLED", "BTWIFI_AUTH_ENABLED")) is not None:
+        config.api.auth_enabled = auth_enabled
+
+    if api_host := os.environ.get("NET_SENTRY_API_HOST"):
+        config.api.host = api_host
+
+    if api_port := os.environ.get("NET_SENTRY_API_PORT"):
+        try:
+            config.api.port = int(api_port)
+        except ValueError:
+            logger.warning("Invalid NET_SENTRY_API_PORT: %s", api_port)
+
+    if photo_directory := os.environ.get("NET_SENTRY_PHOTO_DIRECTORY"):
+        config.api.photo_directory = photo_directory
+
+    if api_users_json := _secret_value(
+        "NET_SENTRY_API_USERS_JSON",
+        "NET_SENTRY_API_USERS_JSON_FILE",
+    ):
+        try:
+            parsed_users = json.loads(api_users_json)
+            if not isinstance(parsed_users, dict) or not all(
+                isinstance(username, str) and isinstance(password_hash, str)
+                for username, password_hash in parsed_users.items()
+            ):
+                raise ValueError("expected a JSON object of username-to-hash entries")
+            config.api.api_users = parsed_users
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ValueError(f"Invalid NET_SENTRY_API_USERS_JSON: {exc}") from exc
 
     if (interval := _env_int("NET_SENTRY_SCAN_INTERVAL", "BTWIFI_SCAN_INTERVAL")) is not None:
         config.scan.interval_seconds = interval
 
-    if continuous := _env("NET_SENTRY_CONTINUOUS", "BTWIFI_CONTINUOUS"):
-        config.scan.continuous = continuous.lower() in ("1", "true", "yes")
+    if (continuous := _env_bool("NET_SENTRY_CONTINUOUS", "BTWIFI_CONTINUOUS")) is not None:
+        config.scan.continuous = continuous
+
+    if (cookie_secure := _env_bool("NET_SENTRY_COOKIE_SECURE")) is not None:
+        config.api.cookie_secure = cookie_secure
+
+    if (proxy_headers := _env_bool("NET_SENTRY_PROXY_HEADERS")) is not None:
+        config.api.proxy_headers = proxy_headers
+
+    if forwarded_allow_ips := os.environ.get("NET_SENTRY_FORWARDED_ALLOW_IPS"):
+        config.api.forwarded_allow_ips = forwarded_allow_ips
+
+    if (bluetooth_enabled := _env_bool("NET_SENTRY_SCAN_BLUETOOTH", "BTWIFI_BLUETOOTH_ENABLED")) is not None:
+        config.scan.bluetooth_enabled = bluetooth_enabled
+
+    if (ble_enabled := _env_bool("NET_SENTRY_SCAN_BLE", "BTWIFI_BLE_ENABLED")) is not None:
+        config.scan.ble_enabled = ble_enabled
 
     if (gap := _env_int("NET_SENTRY_GAP_SECONDS", "BTWIFI_GAP_SECONDS")) is not None:
         config.scan.gap_seconds = gap
 
     return config
+
+
+def validate_config(config: AppConfig) -> None:
+    """Reject unsafe or unbounded runtime configuration."""
+    if not 1 <= config.api.port <= 65535:
+        raise ValueError("api.port must be between 1 and 65535")
+    if config.api.jwt_algorithm not in {"HS256", "HS384", "HS512"}:
+        raise ValueError("api.jwt_algorithm must be one of HS256, HS384, or HS512")
+    if not 1 <= config.api.jwt_expire_minutes <= 24 * 60:
+        raise ValueError("api.jwt_expire_minutes must be between 1 and 1440")
+
+    if config.api.auth_enabled:
+        if not config.api.api_users:
+            raise ValueError("api.auth_enabled=true requires at least one bcrypt-hashed api_users entry")
+        if len(config.api.jwt_secret.encode("utf-8")) < 32:
+            raise ValueError("api.jwt_secret must contain at least 32 bytes when authentication is enabled")
+        invalid_users = []
+        for username, password_hash in config.api.api_users.items():
+            match = re.fullmatch(r"\$2[aby]\$(\d{2})\$[./A-Za-z0-9]{53}", password_hash)
+            if not username or len(username) > 128 or match is None or int(match.group(1)) < 10:
+                invalid_users.append(username)
+        if invalid_users:
+            raise ValueError(
+                "api.api_users contains invalid or weak bcrypt hashes for: "
+                f"{', '.join(invalid_users)} (cost factor 10+ required)"
+            )
+        if "*" in config.api.cors_origins:
+            raise ValueError("Wildcard CORS origins are not allowed when authentication is enabled")
+        if "*" in config.api.allowed_hosts:
+            raise ValueError("Wildcard allowed_hosts are not allowed when authentication is enabled")
+
+    if not config.api.allowed_hosts:
+        raise ValueError("api.allowed_hosts must contain at least one hostname")
+    if config.api.proxy_headers:
+        forwarded_peers = [peer.strip() for peer in config.api.forwarded_allow_ips.split(",") if peer.strip()]
+        if not forwarded_peers:
+            raise ValueError("api.forwarded_allow_ips is required when proxy headers are enabled")
+        if "*" in forwarded_peers:
+            if forwarded_peers != ["*"]:
+                raise ValueError("Wildcard forwarded proxy trust cannot be combined with explicit peers")
+            if not config.api.auth_enabled or not config.api.cookie_secure:
+                raise ValueError("Trusting forwarded headers from all peers requires authentication and secure cookies")
+        else:
+            for peer in forwarded_peers:
+                try:
+                    if "/" in peer:
+                        ipaddress.ip_network(peer)
+                    else:
+                        ipaddress.ip_address(peer)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Invalid forwarded proxy peer {peer!r}; use an IP address or CIDR network"
+                    ) from exc
+
+    if config.ping_sweep.max_workers < 1 or config.ping_sweep.max_workers > 256:
+        raise ValueError("ping_sweep.max_workers must be between 1 and 256")
+    if config.ping_sweep.max_targets < 1 or config.ping_sweep.max_targets > 65536:
+        raise ValueError("ping_sweep.max_targets must be between 1 and 65536")
+    if config.snmp.max_hosts < 1 or config.snmp.max_hosts > 65536:
+        raise ValueError("snmp.max_hosts must be between 1 and 65536")
+    if config.port_scan.max_workers < 1 or config.port_scan.max_workers > 1024:
+        raise ValueError("port_scan.max_workers must be between 1 and 1024")
+    if config.port_scan.host_workers < 1 or config.port_scan.host_workers > 128:
+        raise ValueError("port_scan.host_workers must be between 1 and 128")
+    if any(not isinstance(port, int) or port < 1 or port > 65535 for port in config.port_scan.ports):
+        raise ValueError("port_scan.ports must contain integers between 1 and 65535")
+    if config.database.retention_days < 0:
+        raise ValueError("database.retention_days cannot be negative")
+
+    for field_name, configured_url in (
+        ("alert.webhook_url", config.alert.webhook_url),
+        ("home_assistant.url", config.home_assistant.url),
+    ):
+        if not configured_url:
+            continue
+        parsed = urlparse(configured_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError(f"{field_name} must be an absolute HTTP(S) URL")

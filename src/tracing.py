@@ -132,15 +132,18 @@ def _build_exporter(exporter: str) -> Any:
     return None
 
 
-def instrument_fastapi(app: FastAPI) -> None:
+def instrument_fastapi(app: FastAPI, *, enabled: bool = False) -> None:
     """Attach OpenTelemetry automatic instrumentation to a FastAPI app.
 
-    Safe to call even when tracing is disabled — the function is a no-op
-    if the instrumentation package is not installed.
+    Instrumentation is explicitly opt-in so an optional observability package
+    can never alter request handling when tracing is disabled.
 
     Args:
         app: The FastAPI application instance to instrument.
+        enabled: Whether automatic HTTP tracing is enabled.
     """
+    if not enabled:
+        return
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 

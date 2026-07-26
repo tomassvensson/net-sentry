@@ -17,6 +17,7 @@ from src.config import (
     _apply_env_overrides,
     _parse_raw_config,
     load_config,
+    validate_config,
 )
 
 
@@ -58,6 +59,8 @@ class TestAppConfigDefaults:
         assert config.snmp.retries == 1
         assert config.snmp.max_hosts == 254
         assert config.snmp.subnet == ""
+        assert config.api.proxy_headers is False
+        assert config.api.forwarded_allow_ips == "127.0.0.1"
 
 
 class TestParseRawConfig:
@@ -203,11 +206,80 @@ class TestApplyEnvOverrides:
         assert result.scan.continuous is True
 
     @pytest.mark.timeout(30)
+    def test_scanner_env_overrides(self) -> None:
+        config = AppConfig()
+        with patch.dict(
+            os.environ,
+            {
+                "NET_SENTRY_SCAN_BLUETOOTH": "false",
+                "NET_SENTRY_SCAN_BLE": "false",
+            },
+        ):
+            result = _apply_env_overrides(config)
+        assert result.scan.bluetooth_enabled is False
+        assert result.scan.ble_enabled is False
+
+    @pytest.mark.timeout(30)
     def test_gap_seconds_override(self) -> None:
         config = AppConfig()
         with patch.dict(os.environ, {"BTWIFI_GAP_SECONDS": "600"}):
             result = _apply_env_overrides(config)
         assert result.scan.gap_seconds == 600
+
+    @pytest.mark.timeout(30)
+    def test_file_backed_auth_secrets(self, tmp_path) -> None:
+        jwt_file = tmp_path / "jwt-secret"
+        users_file = tmp_path / "api-users.json"
+        jwt_file.write_text("x" * 48 + "\n", encoding="utf-8")
+        users_file.write_text('{"admin":"$2b$12$' + "x" * 53 + '"}', encoding="utf-8")
+
+        config = AppConfig()
+        with patch.dict(
+            os.environ,
+            {
+                "NET_SENTRY_JWT_SECRET_FILE": str(jwt_file),
+                "NET_SENTRY_API_USERS_JSON_FILE": str(users_file),
+            },
+            clear=True,
+        ):
+            result = _apply_env_overrides(config)
+
+        assert result.api.jwt_secret == "x" * 48
+        assert result.api.api_users == {"admin": "$2b$12$" + "x" * 53}
+
+    @pytest.mark.timeout(30)
+    def test_direct_and_file_secret_are_mutually_exclusive(self, tmp_path) -> None:
+        jwt_file = tmp_path / "jwt-secret"
+        jwt_file.write_text("x" * 48, encoding="utf-8")
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "NET_SENTRY_JWT_SECRET": "y" * 48,
+                    "NET_SENTRY_JWT_SECRET_FILE": str(jwt_file),
+                },
+                clear=True,
+            ),
+            pytest.raises(ValueError, match="Set only one"),
+        ):
+            _apply_env_overrides(AppConfig())
+
+    @pytest.mark.timeout(30)
+    def test_proxy_header_env_overrides(self) -> None:
+        config = AppConfig()
+        with patch.dict(
+            os.environ,
+            {
+                "NET_SENTRY_PROXY_HEADERS": "true",
+                "NET_SENTRY_FORWARDED_ALLOW_IPS": "172.20.0.0/16",
+            },
+            clear=True,
+        ):
+            result = _apply_env_overrides(config)
+
+        assert result.api.proxy_headers is True
+        assert result.api.forwarded_allow_ips == "172.20.0.0/16"
 
     @pytest.mark.timeout(30)
     def test_invalid_gap_seconds(self) -> None:
@@ -248,3 +320,66 @@ class TestLoadConfig:
             mock_path.return_value.exists.return_value = True
             config = load_config("/bad/config.yaml")
         assert isinstance(config, AppConfig)  # Should use defaults
+
+
+class TestValidateConfig:
+    """Tests for fail-fast security and resource-bound validation."""
+
+    def test_auth_requires_users(self) -> None:
+        config = AppConfig()
+        config.api.auth_enabled = True
+        config.api.jwt_secret = "x" * 32
+        with pytest.raises(ValueError, match="at least one"):
+            validate_config(config)
+
+    def test_auth_rejects_short_secret(self) -> None:
+        config = AppConfig()
+        config.api.auth_enabled = True
+        config.api.jwt_secret = "too-short"
+        config.api.api_users = {"admin": "$2b$12$" + "x" * 53}
+        with pytest.raises(ValueError, match="at least 32 bytes"):
+            validate_config(config)
+
+    def test_auth_rejects_wildcard_cors(self) -> None:
+        config = AppConfig()
+        config.api.auth_enabled = True
+        config.api.jwt_secret = "x" * 32
+        config.api.api_users = {"admin": "$2b$12$" + "x" * 53}
+        config.api.cors_origins = ["*"]
+        with pytest.raises(ValueError, match="Wildcard CORS"):
+            validate_config(config)
+
+    def test_auth_rejects_wildcard_allowed_hosts(self) -> None:
+        config = AppConfig()
+        config.api.auth_enabled = True
+        config.api.jwt_secret = "x" * 32
+        config.api.api_users = {"admin": "$2b$12$" + "x" * 53}
+        config.api.allowed_hosts = ["*"]
+        with pytest.raises(ValueError, match="Wildcard allowed_hosts"):
+            validate_config(config)
+
+    def test_outbound_urls_must_be_http(self) -> None:
+        config = AppConfig()
+        config.alert.webhook_url = "file:///etc/passwd"
+        with pytest.raises(ValueError, match=r"HTTP\(S\)"):
+            validate_config(config)
+
+    def test_ping_target_limit_is_bounded(self) -> None:
+        config = AppConfig()
+        config.ping_sweep.max_targets = 100_000
+        with pytest.raises(ValueError, match="max_targets"):
+            validate_config(config)
+
+    def test_wildcard_forwarded_peers_require_hardened_auth(self) -> None:
+        config = AppConfig()
+        config.api.proxy_headers = True
+        config.api.forwarded_allow_ips = "*"
+        with pytest.raises(ValueError, match="authentication and secure cookies"):
+            validate_config(config)
+
+    def test_forwarded_peers_must_be_ip_addresses_or_networks(self) -> None:
+        config = AppConfig()
+        config.api.proxy_headers = True
+        config.api.forwarded_allow_ips = "caddy"
+        with pytest.raises(ValueError, match="IP address or CIDR"):
+            validate_config(config)

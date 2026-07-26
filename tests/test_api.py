@@ -2,7 +2,7 @@
 
 from collections.abc import Generator
 from datetime import UTC, datetime
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,7 +25,10 @@ def db_engine():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    return engine
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture()
@@ -38,7 +41,7 @@ def client(db_engine):
 
     set_engine(db_engine)
     app.dependency_overrides[get_db] = _override_get_db
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost") as c:
         yield c
     app.dependency_overrides.clear()
     set_engine(None)
@@ -79,7 +82,7 @@ def seeded_client(db_engine):
 
     set_engine(db_engine)
     app.dependency_overrides[get_db] = _override_get_db
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost") as c:
         yield c
     app.dependency_overrides.clear()
     set_engine(None)
@@ -98,14 +101,32 @@ class TestHealthCheck:
         assert "timestamp" in data
 
     @pytest.mark.timeout(30)
-    def test_degraded_without_engine(self) -> None:
+    def test_startup_fails_without_database(self) -> None:
         set_engine(None)
         app.dependency_overrides.clear()
-        with patch("src.api.init_database", side_effect=RuntimeError("no db")), TestClient(app) as c:
-            resp = c.get("/api/v1/health")
-        data = resp.json()
-        assert data["status"] == "degraded"
-        assert data["database"]["connected"] is False
+        with (
+            patch("src.api.init_database", side_effect=RuntimeError("no db")),
+            pytest.raises(RuntimeError, match="no db"),
+            TestClient(app, base_url="http://localhost"),
+        ):
+            pass
+
+    @pytest.mark.timeout(30)
+    def test_lifespan_disposes_database_engine_it_creates(self) -> None:
+        set_engine(None)
+        app.dependency_overrides.clear()
+        owned_engine = MagicMock()
+
+        with (
+            patch("src.api.init_database", return_value=owned_engine),
+            TestClient(
+                app,
+                base_url="http://localhost",
+            ),
+        ):
+            pass
+
+        owned_engine.dispose.assert_called_once_with()
 
 
 class TestPrometheusMetrics:
@@ -171,8 +192,9 @@ class TestGetDevice:
     @pytest.mark.timeout(30)
     def test_missing_device(self, client) -> None:
         resp = client.get("/api/v1/devices/00:00:00:00:00:00")
+        assert resp.status_code == 404
         data = resp.json()
-        assert data["error"] == "Device not found"
+        assert data["detail"] == "Device not found"
 
 
 class TestGetDeviceWindows:
@@ -248,7 +270,7 @@ class TestSetEngine:
 
         set_engine(db_engine)
         app.dependency_overrides[get_db] = _override
-        with TestClient(app) as c:
+        with TestClient(app, base_url="http://localhost") as c:
             resp = c.get("/api/v1/health")
             assert resp.json()["database"]["connected"] is True
         app.dependency_overrides.clear()

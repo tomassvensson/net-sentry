@@ -3,6 +3,7 @@
 import importlib
 
 import pytest
+from starlette.requests import Request
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -19,6 +20,22 @@ def _reload_auth(**overrides):
     return auth_mod
 
 
+def _request(path: str = "/") -> Request:
+    """Build a minimal HTTP request for direct dependency tests."""
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": path,
+            "query_string": b"",
+            "headers": [],
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+
+
 # ---------------------------------------------------------------------------
 # compute_confidence / evidence
 # ---------------------------------------------------------------------------
@@ -28,7 +45,7 @@ def test_create_and_decode_access_token():
     """Round-trip: encode then decode a token and recover the subject."""
     from src.auth import create_access_token, decode_access_token
 
-    secret = "test-secret"
+    secret = "test-secret-that-is-at-least-32-bytes"
     token = create_access_token({"sub": "alice"}, secret=secret, algorithm="HS256", expires_minutes=10)
     claims = decode_access_token(token, secret=secret, algorithm="HS256")
     assert claims["sub"] == "alice"
@@ -51,9 +68,14 @@ def test_decode_wrong_secret_raises():
 
     from src.auth import create_access_token, decode_access_token
 
-    token = create_access_token({"sub": "bob"}, secret="secret-a", algorithm="HS256", expires_minutes=5)
+    token = create_access_token(
+        {"sub": "bob"},
+        secret="secret-a-that-is-at-least-32-bytes",
+        algorithm="HS256",
+        expires_minutes=5,
+    )
     with pytest.raises(HTTPException) as exc_info:
-        decode_access_token(token, secret="secret-b", algorithm="HS256")
+        decode_access_token(token, secret="secret-b-that-is-at-least-32-bytes", algorithm="HS256")
     assert exc_info.value.status_code == 401
 
 
@@ -112,7 +134,7 @@ def test_require_auth_disabled_returns_none(monkeypatch):
     import src.auth as auth_mod
 
     monkeypatch.setattr(auth_mod, "_auth_enabled", False)
-    result = auth_mod.require_auth(token=None)
+    result = auth_mod.require_auth(request=_request(), token=None)
     assert result is None
 
 
@@ -124,7 +146,7 @@ def test_require_auth_enabled_no_token_raises(monkeypatch):
 
     monkeypatch.setattr(auth_mod, "_auth_enabled", True)
     with pytest.raises(HTTPException) as exc_info:
-        auth_mod.require_auth(token=None)
+        auth_mod.require_auth(request=_request(), token=None)
     assert exc_info.value.status_code == 401
 
 
@@ -132,13 +154,14 @@ def test_require_auth_enabled_valid_token(monkeypatch):
     """require_auth returns username when a valid token is provided."""
     import src.auth as auth_mod
 
-    secret = "unit-test-secret"
+    secret = "unit-test-secret-that-is-at-least-32-bytes"
     token = auth_mod.create_access_token({"sub": "admin"}, secret=secret, expires_minutes=5)
     monkeypatch.setattr(auth_mod, "_auth_enabled", True)
     monkeypatch.setattr(auth_mod, "_jwt_secret", secret)
     monkeypatch.setattr(auth_mod, "_jwt_algorithm", "HS256")
+    monkeypatch.setattr(auth_mod, "_api_users", {"admin": "active"})
 
-    result = auth_mod.require_auth(token=token)
+    result = auth_mod.require_auth(request=_request(), token=token)
     assert result == "admin"
 
 

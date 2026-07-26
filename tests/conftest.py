@@ -65,7 +65,10 @@ def in_memory_engine():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    return engine
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture()

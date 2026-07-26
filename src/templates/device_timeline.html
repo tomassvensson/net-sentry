@@ -139,6 +139,7 @@
         .summary-bar-seg { height: 100%; }
         .summary-bar-seg.seg-on { background: var(--window-bar); }
         .summary-bar-seg.seg-off { background: transparent; }
+        #signal-chart { display: block; width: 100%; min-height: 180px; }
     </style>
 </head>
 <body>
@@ -150,7 +151,7 @@
         </div>
         <h1>Timeline — {{ device.device_name or device.mac_address }}</h1>
     </div>
-    <button class="theme-btn" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'">
+    <button class="theme-btn" id="theme-toggle" type="button">
         Toggle theme
     </button>
 </div>
@@ -278,11 +279,17 @@
     {% endif %}
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"
-        integrity="sha384-b0GXujLkk9eYYSmcSfoyZbfyElGAQnDyY0skCHSG6w3JgTMFnz11ggrTAr7seu9f"
-        crossorigin="anonymous"></script>
-<script>
+<script nonce="{{ request.state.csp_nonce }}">
 (function () {
+    var themeButton = document.getElementById('theme-toggle');
+    themeButton.addEventListener('click', function () {
+        var next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+        document.documentElement.dataset.theme = next;
+        localStorage.setItem('net-sentry-theme', next);
+    });
+    var savedTheme = localStorage.getItem('net-sentry-theme');
+    if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+
     // Make timeline bars proportional in width to their duration
     var entries = document.querySelectorAll('.tl-entry');
     if (!entries.length) return;
@@ -318,11 +325,10 @@
         prev = e;
     });
 
-    // Signal strength sparkline via Chart.js
+    // Dependency-free signal strength chart.
     var chartCanvas = document.getElementById('signal-chart');
-    if (chartCanvas && typeof Chart !== 'undefined') {
-        var signalLabels = [];
-        var signalData = [];
+    if (chartCanvas) {
+        var signalPoints = [];
         entries.forEach(function (el) {
             if (el.dataset.type !== 'window') return;
             var start = Number.parseFloat(el.dataset.start);
@@ -331,36 +337,66 @@
             if (dbm) {
                 var val = Number.parseFloat(dbm.textContent);
                 if (!Number.isNaN(val)) {
-                    signalLabels.push(dateLabel);
-                    signalData.push(val);
+                    signalPoints.push({label: dateLabel, value: val});
                 }
             }
         });
-        if (signalLabels.length > 0) {
-            const signalChart = new Chart(chartCanvas, { // NOSONAR — Chart renders to canvas as side effect; ref kept intentionally
-                type: 'line',
-                data: {
-                    labels: signalLabels,
-                    datasets: [{
-                        label: 'Signal (dBm)',
-                        data: signalData,
-                        borderColor: '#e94560',
-                        backgroundColor: 'rgba(233,69,96,0.1)',
-                        tension: 0.3,
-                        fill: true,
-                        pointRadius: signalLabels.length > 50 ? 0 : 3,
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        x: { ticks: { maxTicksLimit: 8, color: '#999' }, grid: { color: '#2a2a4a' } },
-                        y: { reverse: false, ticks: { color: '#999' }, grid: { color: '#2a2a4a' } }
-                    }
-                }
+
+        function drawSignalChart() {
+            if (!signalPoints.length) return;
+            var ratio = window.devicePixelRatio || 1;
+            var width = Math.max(chartCanvas.clientWidth, 320);
+            var height = 180;
+            chartCanvas.width = width * ratio;
+            chartCanvas.height = height * ratio;
+            var ctx = chartCanvas.getContext('2d');
+            ctx.scale(ratio, ratio);
+
+            var values = signalPoints.map(function (point) { return point.value; });
+            var minValue = Math.min.apply(null, values) - 5;
+            var maxValue = Math.max.apply(null, values) + 5;
+            var valueSpan = maxValue - minValue || 1;
+            var left = 48, right = 12, top = 12, bottom = 28;
+            var chartWidth = width - left - right;
+            var chartHeight = height - top - bottom;
+            var styles = getComputedStyle(document.documentElement);
+
+            ctx.clearRect(0, 0, width, height);
+            ctx.font = '11px sans-serif';
+            ctx.fillStyle = styles.getPropertyValue('--text-dim');
+            ctx.strokeStyle = styles.getPropertyValue('--border');
+            ctx.lineWidth = 1;
+            for (var grid = 0; grid <= 4; grid += 1) {
+                var y = top + chartHeight * grid / 4;
+                var labelValue = Math.round(maxValue - valueSpan * grid / 4);
+                ctx.beginPath();
+                ctx.moveTo(left, y);
+                ctx.lineTo(width - right, y);
+                ctx.stroke();
+                ctx.fillText(labelValue + ' dBm', 2, y + 4);
+            }
+
+            ctx.strokeStyle = styles.getPropertyValue('--accent');
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            signalPoints.forEach(function (point, index) {
+                var x = left + chartWidth * (signalPoints.length === 1 ? 0.5 : index / (signalPoints.length - 1));
+                var y = top + (maxValue - point.value) / valueSpan * chartHeight;
+                if (index === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
             });
+            ctx.stroke();
+
+            ctx.fillStyle = styles.getPropertyValue('--text-dim');
+            ctx.fillText(signalPoints[0].label, left, height - 7);
+            if (signalPoints.length > 1) {
+                var finalLabel = signalPoints[signalPoints.length - 1].label;
+                var labelWidth = ctx.measureText(finalLabel).width;
+                ctx.fillText(finalLabel, width - right - labelWidth, height - 7);
+            }
         }
+        drawSignalChart();
+        window.addEventListener('resize', drawSignalChart);
     }
 })();
 </script>

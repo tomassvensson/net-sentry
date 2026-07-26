@@ -49,6 +49,8 @@ ping_sweep:
     # - "192.168.0.0/24"
   max_workers: 40
   timeout_seconds: 1.0
+  # Hard cap across all configured subnets to prevent accidental /8 expansion.
+  max_targets: 4096
   # Map a CIDR subnet to a human-readable label for display/grouping.
   # If a host's source subnet matches, this label is shown in the "Segment" column.
   subnet_labels: {}
@@ -83,9 +85,15 @@ alert:
   log_file: null
   sound_enabled: false
   cooldown_seconds: 300
-  # Configurable alert rules (E):
+  # Webhook URL for alert notifications (Slack, PagerDuty, etc.)
+  webhook_url: ""
+  webhook_format: "slack"  # "slack" or "pagerduty"
+  # Configurable alert rules:
   #   disappearance — fire if a specific device has not been seen for > threshold_minutes
   #   time_window   — fire if a new device is discovered during the given hour window
+  #
+  # NOTE: Net Sentry also automatically alerts for devices not seen in 2 weeks or never seen.
+  # This check runs during each scan cycle and respects the cooldown_seconds setting.
   rules: []
   # - rule_type: disappearance
   #   mac_address: "AA:BB:CC:DD:EE:FF"
@@ -107,7 +115,7 @@ whitelist: []
 oui:
   auto_update: true
   update_interval_hours: 168  # 1 week
-  cache_file: "src/data/oui_cache.txt"
+  cache_file: "data/oui_cache.txt"
 
 # mDNS scanner settings
 mdns:
@@ -118,7 +126,7 @@ mdns:
 monitor_mode:
   interface: "wlan0mon"
   use_docker: true
-  docker_image: "btwifi-monitor:latest"
+  docker_image: "net-sentry-monitor:latest"
   channel_hop: true
   hop_interval_seconds: 0.5
   capture_duration_seconds: 30
@@ -126,22 +134,35 @@ monitor_mode:
 # REST API / web dashboard settings
 api:
   enabled: true
-  host: "0.0.0.0"
+  # Safe local default. Set NET_SENTRY_API_HOST=0.0.0.0 only behind
+  # authentication, TLS, and a trusted firewall/reverse proxy.
+  host: "127.0.0.1"
   port: 8000
-  # Enable JWT authentication for the /api/v1/* endpoints.
-  # Auth is enabled by default; set to false only for local development.
-  auth_enabled: true
+  # Localhost-only development is usable without credentials. Authentication
+  # is mandatory before exposing the service beyond the local machine.
+  auth_enabled: false
   # Secret key used to sign JWT tokens.
-  # Override via environment variable: BTWIFI_JWT_SECRET=<value>
-  # IMPORTANT: generate a strong random secret for production!
+  # Override with NET_SENTRY_JWT_SECRET (32+ random bytes) in production.
   jwt_secret: "change-me-in-production-use-env-var"
   jwt_algorithm: "HS256"
   jwt_expire_minutes: 60
+  # Set true whenever the public URL uses HTTPS.
+  cookie_secure: false
+  # Trust X-Forwarded-* only behind a known reverse proxy. The production
+  # Compose profile enables this on its isolated container network.
+  proxy_headers: false
+  forwarded_allow_ips: "127.0.0.1"
+  # Uploaded files are stored outside the source/package tree.
+  photo_directory: "data/photos"
+  # Host-header allowlist. Add the public DNS name before reverse-proxying.
+  allowed_hosts:
+    - "localhost"
+    - "127.0.0.1"
   # API users (username: bcrypt-hashed password).
   # Generate a hash with:  python -c "import bcrypt; print(bcrypt.hashpw(b'mypassword', bcrypt.gensalt()).decode())"
   api_users: {}
   #  admin: "$2b$12$examplehash..."
-  # CORS allowed origins.  Override via: BTWIFI_CORS_ORIGINS=http://myapp.example.com
+  # Exact trusted origins only. Override with NET_SENTRY_CORS_ORIGINS.
   cors_origins:
     - "http://localhost"
     - "http://127.0.0.1"
@@ -176,4 +197,24 @@ home_assistant:
   token: ""
   # HTTP timeout for the HA API call (seconds).
   timeout_seconds: 5.0
+
+# ---------------------------------------------------------------------------
+# MQTT publishing
+# Publish device discovery events to an MQTT broker (e.g. for Home Assistant)
+# ---------------------------------------------------------------------------
+mqtt:
+  enabled: false
+  broker_host: "localhost"
+  broker_port: 1883
+  topic_prefix: "net-sentry"
+  username: null
+  password: null
+  client_id: "net-sentry-scanner"
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics
+# Expose /metrics endpoint for Prometheus scraping
+# ---------------------------------------------------------------------------
+metrics:
+  enabled: true
 

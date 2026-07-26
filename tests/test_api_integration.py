@@ -25,7 +25,7 @@ def _isolated_api_engine(in_memory_engine):
 @pytest.fixture()
 def client(in_memory_engine):
     """Return a TestClient bound to the isolated in-memory engine."""
-    with TestClient(app, raise_server_exceptions=True) as c:
+    with TestClient(app, base_url="http://localhost", raise_server_exceptions=True) as c:
         yield c
 
 

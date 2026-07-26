@@ -28,6 +28,8 @@ import pytest
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+    from uvicorn import Server
+
 # Skip entire module when playwright is not installed
 pytest.importorskip("playwright", reason="playwright is not installed — skipping E2E tests")
 
@@ -58,7 +60,7 @@ def _get_free_port() -> int:
         return s.getsockname()[1]
 
 
-def _start_server(port: int) -> threading.Thread:
+def _start_server(port: int) -> tuple[Server, threading.Thread]:
     """Launch the FastAPI app in a daemon thread on *port*."""
     import uvicorn  # type: ignore[import]
 
@@ -78,7 +80,7 @@ def _start_server(port: int) -> threading.Thread:
     while time.monotonic() < deadline:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                return thread
+                return server, thread
         except OSError:
             time.sleep(0.05)
 
@@ -94,8 +96,14 @@ def _start_server(port: int) -> threading.Thread:
 def base_url() -> Generator[str]:
     """Start the FastAPI server once per test session and yield the base URL."""
     port = _get_free_port()
-    _start_server(port)
-    yield f"http://127.0.0.1:{port}"
+    server, thread = _start_server(port)
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+        if thread.is_alive():
+            pytest.fail("E2E API server did not stop within 5 seconds")
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +158,7 @@ class TestDashboard:
         errors: list[str] = []
         page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
         page.goto(base_url)
-        # Allow time for HTMX to load
+        # Allow time for the periodic-refresh script to initialise.
         page.wait_for_timeout(1500)
         assert errors == [], f"Console errors: {errors}"
 
@@ -162,13 +170,11 @@ class TestDashboard:
         text = stat_value.inner_text()
         assert text.strip().isdigit(), f"Expected numeric stat value, got: {text!r}"
 
-    def test_htmx_script_loaded(self, page: Page, base_url: str) -> None:
-        """The page should load the HTMX script."""
+    def test_dashboard_has_no_third_party_runtime_scripts(self, page: Page, base_url: str) -> None:
+        """The dashboard should not execute CDN-hosted JavaScript."""
         page.goto(base_url)
-        # HTMX attaches itself to window.htmx once loaded
-        page.wait_for_timeout(1000)
-        htmx_defined = page.evaluate("typeof window.htmx !== 'undefined'")
-        assert htmx_defined, "window.htmx is not defined — HTMX did not load"
+        external_sources = page.locator("script[src]").evaluate_all("(scripts) => scripts.map((script) => script.src)")
+        assert external_sources == []
 
 
 @pytest.mark.e2e
@@ -199,23 +205,21 @@ class TestHealthEndpoint:
 @pytest.mark.e2e
 @pytest.mark.timeout(60)
 class TestApiDevicesTable:
-    """E2E tests for the HTMX /api/v1/devices-table fragment."""
+    """E2E tests for the dashboard's /api/v1/devices-table fragment."""
 
     def test_devices_table_fragment_returns_html(self, page: Page, base_url: str) -> None:
-        """The HTMX fragment endpoint should return HTML content."""
+        """The table-fragment endpoint should return HTML content."""
         response = page.request.get(f"{base_url}/api/v1/devices-table?page=1")
         assert response.status == 200
         content_type = response.headers.get("content-type", "")
         assert "text/html" in content_type
 
-    def test_refresh_button_triggers_htmx(self, page: Page, base_url: str) -> None:
-        """Clicking Refresh should fire the HTMX request and update the table."""
+    def test_refresh_button_requests_table_fragment(self, page: Page, base_url: str) -> None:
+        """Clicking Refresh should request and update the table fragment."""
         page.goto(base_url)
-        # Intercept the HTMX request to the devices-table endpoint
         requests: list[str] = []
         page.on("request", lambda req: requests.append(req.url) if "devices-table" in req.url else None)
         page.get_by_role("button", name="Refresh").click()
-        # Wait briefly for HTMX request to fire
         page.wait_for_timeout(1000)
         assert any("devices-table" in url for url in requests), (
             "Clicking Refresh did not trigger a request to /api/v1/devices-table"
