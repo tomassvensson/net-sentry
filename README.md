@@ -38,7 +38,7 @@ BtWiFi uses multiple discovery protocols to scan for nearby wireless and network
 - **Testing:** pytest with 324 tests, 96% coverage
 - **Linting:** ruff (lint + format)
 - **Type Checking:** mypy
-- **CI/CD:** GitHub Actions (lint, test matrix, Trivy, CodeQL)
+- **CI/CD:** GitHub Actions (lint, test matrix, Trivy, CodeQL), mirrored on GitLab CI as a proving ground
 - **Code Quality:** SonarQube
 
 ## Quick Start
@@ -136,6 +136,9 @@ btwf/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml            # GitHub Actions CI pipeline
+├── .gitlab-ci.yml            # GitLab CI mirror of ci.yml (proving ground)
+├── scripts/
+│   └── push-via-gitlab.sh    # Push to GitLab, wait for green, then push to GitHub
 ├── docs/
 │   └── adr/
 │       └── 001-technology-choice.md
@@ -147,6 +150,20 @@ btwf/
 ├── sonar-project.properties
 └── README.md
 ```
+
+## Pushing Changes
+
+GitHub only receives commits that already passed CI on GitLab. Instead of `git push`, run:
+
+```bash
+scripts/push-via-gitlab.sh              # GitLab pipeline -> green -> push to GitHub -> watch Actions
+scripts/push-via-gitlab.sh --no-windows # skip the slow Windows jobs on GitLab
+scripts/push-via-gitlab.sh --gitlab-only
+```
+
+On failure the script prints the failing jobs' logs and does not touch GitHub.
+`.gitlab-ci.yml` mirrors `ci.yml` job for job (SonarCloud and CodeQL stay GitHub-only);
+keep the two in sync when changing CI.
 
 ## Architecture
 

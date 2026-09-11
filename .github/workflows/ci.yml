@@ -81,21 +81,28 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # Forks and clones have no SONAR_TOKEN; skip the scan there instead of failing.
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        if: env.SONAR_TOKEN != ''
         with:
           fetch-depth: 0
       - name: Download coverage report
+        if: env.SONAR_TOKEN != ''
         uses: actions/download-artifact@v4
         with:
           name: coverage-report
       - name: SonarCloud Scan
+        if: env.SONAR_TOKEN != ''
         uses: SonarSource/sonarqube-scan-action@v6
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
             -Dsonar.host.url=https://sonarcloud.io
+      - name: Skipped (no SONAR_TOKEN)
+        if: env.SONAR_TOKEN == ''
+        run: echo "SONAR_TOKEN is not set for this repository; SonarCloud scan skipped."
 
   security:
     runs-on: ubuntu-latest
