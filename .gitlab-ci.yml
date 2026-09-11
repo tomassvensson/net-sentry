@@ -4,12 +4,15 @@
 # pushes to GitHub once this pipeline is green. Keep the jobs in step with ci.yml.
 #
 # Job map (GitHub -> GitLab):
-#   lint        -> lint
-#   type-check  -> type-check
-#   test        -> test:linux [3.10, 3.12, 3.13] + test:windows [3.10, 3.12, 3.13]
-#   security    -> security (pip audit) + trivy
-#   sonarcloud  -> not mirrored (needs SONAR_TOKEN; GitHub-only)
-#   codeql      -> not mirrored (GitHub-only)
+#   lint          -> lint
+#   type-check    -> type-check
+#   test          -> test:linux + test:windows (Python 3.13, like the GitHub matrix)
+#   security      -> security (pip-audit, bandit) + trivy (filesystem scan)
+#   integration   -> not mirrored (needs Docker; continue-on-error on GitHub)
+#   e2e           -> not mirrored (Playwright; continue-on-error on GitHub)
+#   lighthouse    -> not mirrored (Node/LHCI; continue-on-error on GitHub)
+#   zap-baseline  -> not mirrored (continue-on-error on GitHub)
+#   sonarcloud    -> not mirrored (needs SONAR_TOKEN; GitHub-only)
 
 workflow:
   rules:
@@ -19,12 +22,13 @@ stages:
   - check
 
 variables:
+  PYTHON_VERSION: "3.13"
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 .python:
   stage: check
-  image: python:3.13
+  image: python:${PYTHON_VERSION}
   interruptible: true
   cache:
     key: pip-$CI_JOB_NAME_SLUG
@@ -48,13 +52,9 @@ type-check:
 
 test:linux:
   extends: .python
-  image: python:${PYTHON_VERSION}
-  parallel:
-    matrix:
-      - PYTHON_VERSION: ["3.10", "3.12", "3.13"]
   script:
     - pip install types-tabulate
-    - pytest tests/ --timeout=120 --cov=src --cov-report=xml --cov-report=term-missing
+    - pytest tests/ -m "not integration" --timeout=120 --cov=src --cov-report=xml --cov-report=term-missing
   coverage: '/^TOTAL.*\s+(\d+(?:\.\d+)?)%/'
   artifacts:
     when: always
@@ -63,7 +63,7 @@ test:linux:
         coverage_format: cobertura
         path: coverage.xml
 
-# GitLab.com hosted Windows runner (PowerShell). Takes ~8 min per job.
+# GitLab.com hosted Windows runner (PowerShell). Takes ~8 min.
 # Python is installed with uv because the runner image ships none.
 # Skip with: scripts/push-via-gitlab.sh --no-windows
 test:windows:
@@ -75,9 +75,6 @@ test:windows:
     - if: $SKIP_WINDOWS == "1"
       when: never
     - when: on_success
-  parallel:
-    matrix:
-      - PYTHON_VERSION: ["3.10", "3.12", "3.13"]
   script:
     - irm https://astral.sh/uv/install.ps1 | iex
     - $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
@@ -87,12 +84,19 @@ test:windows:
     - python -m pip install --upgrade pip
     - pip install -e ".[dev]"
     - pip install types-tabulate
-    - pytest tests/ --timeout=120 --cov=src --cov-report=xml --cov-report=term-missing
+    - pytest tests/ -m "not integration" --timeout=120 --cov=src --cov-report=xml --cov-report=term-missing
 
 security:
   extends: .python
   script:
-    - pip audit || true
+    - pip install pip-audit
+    - pip-audit --strict --desc on 2>&1 || true
+    - bandit -r src/ -ll -q -f json -o bandit-report.json 2>&1 || true
+    - bandit -r src/ -ll -q 2>&1 || true
+  artifacts:
+    when: always
+    paths:
+      - bandit-report.json
 
 trivy:
   stage: check

@@ -9,14 +9,14 @@ import re
 import socket
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.oui_lookup import is_randomized_mac, lookup_vendor, normalize_mac
 
 logger = logging.getLogger(__name__)
 
 # SSDP multicast address and port
-_SSDP_ADDR = "239.255.255.250"
+_SSDP_ADDR = "239.255.255.250"  # NOSONAR - standard SSDP multicast address (RFC 2608)
 _SSDP_PORT = 1900
 _SSDP_TIMEOUT = 3.0
 
@@ -39,7 +39,7 @@ class SsdpDevice:
     device_type: str = ""
     vendor: str | None = None
     is_randomized: bool = False
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 def scan_ssdp_devices(timeout: float = _SSDP_TIMEOUT) -> list[SsdpDevice]:
@@ -88,8 +88,8 @@ def scan_ssdp_devices(timeout: float = _SSDP_TIMEOUT) -> list[SsdpDevice]:
 
         sock.close()
 
-    except OSError as exc:
-        logger.error("SSDP discovery failed: %s", exc)
+    except OSError:
+        logger.exception("SSDP discovery failed")
 
     logger.info("SSDP discovery complete: found %d devices.", len(devices))
     return devices

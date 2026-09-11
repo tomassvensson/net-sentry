@@ -13,11 +13,12 @@ import platform
 import re
 import socket
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from src.oui_lookup import is_randomized_mac, lookup_vendor, normalize_mac
+from src.oui_lookup import is_multicast_mac, is_randomized_mac, lookup_vendor, normalize_mac
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,8 @@ class NetworkDevice:
     vendor: str | None = None
     is_randomized: bool = False
     arp_type: str = "dynamic"  # "dynamic" or "static"
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    network_segment: str | None = None  # Subnet/VLAN label from ping_sweep config
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:
         """Post-initialization: look up vendor and check for randomization."""
@@ -156,8 +158,7 @@ def _parse_arp_entry(
         return None
 
     # Skip multicast MACs (first byte odd)
-    first_byte = int(mac[:2], 16)
-    if first_byte & 0x01:
+    if is_multicast_mac(mac):
         return None
 
     if mac in seen_macs:
@@ -212,8 +213,7 @@ def _parse_ip_neigh_output(output: str) -> list[NetworkDevice]:
         except ValueError:
             continue
 
-        first_byte = int(mac[:2], 16)
-        if first_byte & 0x01:
+        if is_multicast_mac(mac):
             continue
 
         if mac in seen_macs:
@@ -244,9 +244,16 @@ def _ip_to_pseudo_mac(ip: str) -> str:
 
 def _ping_host(ip: str, timeout: float = 1.0) -> str | None:
     """Ping a single host. Returns the IP if it responds, None otherwise."""
+    system = platform.system().lower()
+    if system == "windows":
+        timeout_ms = max(1, int(timeout * 1000))
+        cmd = ["ping", "-n", "1", "-w", str(timeout_ms), str(ip)]
+    else:
+        cmd = ["ping", "-c", "1", "-W", str(max(1, int(timeout))), str(ip)]
+
     try:
         result = subprocess.run(
-            ["ping", "-c", "1", "-W", str(int(timeout)), str(ip)],
+            cmd,
             capture_output=True,
             timeout=timeout + 2,
             check=False,
@@ -258,7 +265,36 @@ def _ping_host(ip: str, timeout: float = 1.0) -> str | None:
     return None
 
 
-def ping_sweep(subnets: list[str], max_workers: int = 40, timeout: float = 1.0) -> list[NetworkDevice]:
+def _run_concurrent_pings(targets: list[str], max_workers: int, timeout: float) -> list[str]:
+    """Ping all *targets* concurrently and return the IPs that responded."""
+    alive: list[str] = []
+    checked = 0
+    last_progress_log = time.monotonic()
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_ping_host, ip, timeout): ip for ip in targets}
+        for future in as_completed(futures):
+            result = future.result()
+            checked += 1
+            if result:
+                alive.append(result)
+            now = time.monotonic()
+            if checked == len(targets) or now - last_progress_log >= 30:
+                logger.info(
+                    "Ping sweep progress: %d/%d host(s) checked, %d responded.",
+                    checked,
+                    len(targets),
+                    len(alive),
+                )
+                last_progress_log = now
+    return alive
+
+
+def ping_sweep(
+    subnets: list[str],
+    max_workers: int = 40,
+    timeout: float = 1.0,
+    subnet_labels: dict[str, str] | None = None,
+) -> list[NetworkDevice]:
     """Ping-sweep one or more subnets and return responding hosts.
 
     For hosts discovered through a NAT (where real MACs aren't available),
@@ -268,15 +304,26 @@ def ping_sweep(subnets: list[str], max_workers: int = 40, timeout: float = 1.0) 
         subnets: List of CIDR subnets to scan (e.g. ["192.168.0.0/24"]).
         max_workers: Maximum concurrent pings.
         timeout: Ping timeout per host in seconds.
+        subnet_labels: Optional mapping from CIDR string to a human-readable
+            segment label (e.g. ``{"192.168.1.0/24": "office"}``).  When
+            provided, each discovered device gets its ``network_segment``
+            field set to the corresponding label (or the raw CIDR if no
+            label is defined).
 
     Returns:
         List of NetworkDevice objects for responding hosts.
     """
+    _subnet_labels: dict[str, str] = subnet_labels or {}
+    # Build a map from each host IP to its source CIDR (for labelling)
+    ip_to_cidr: dict[str, str] = {}
     targets: list[str] = []
     for cidr in subnets:
         try:
             network = ipaddress.ip_network(cidr, strict=False)
-            targets.extend(str(h) for h in network.hosts())
+            for h in network.hosts():
+                host_str = str(h)
+                targets.append(host_str)
+                ip_to_cidr[host_str] = cidr
         except ValueError:
             logger.warning("Invalid subnet: %s", cidr)
 
@@ -284,15 +331,7 @@ def ping_sweep(subnets: list[str], max_workers: int = 40, timeout: float = 1.0) 
         return []
 
     logger.info("Ping sweep: %d hosts across %d subnet(s)...", len(targets), len(subnets))
-
-    alive: list[str] = []
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_ping_host, ip, timeout): ip for ip in targets}
-        for future in as_completed(futures):
-            result = future.result()
-            if result:
-                alive.append(result)
-
+    alive = _run_concurrent_pings(targets, max_workers, timeout)
     logger.info("Ping sweep complete: %d hosts responded.", len(alive))
 
     devices: list[NetworkDevice] = []
@@ -300,6 +339,8 @@ def ping_sweep(subnets: list[str], max_workers: int = 40, timeout: float = 1.0) 
         mac = _ip_to_pseudo_mac(ip)
         hostname = _resolve_hostname(ip)
         vendor = lookup_vendor(mac)
+        source_cidr = ip_to_cidr.get(ip)
+        segment: str | None = _subnet_labels.get(source_cidr, source_cidr) if source_cidr else None
         devices.append(
             NetworkDevice(
                 ip_address=ip,
@@ -307,6 +348,7 @@ def ping_sweep(subnets: list[str], max_workers: int = 40, timeout: float = 1.0) 
                 hostname=hostname,
                 vendor=vendor,
                 arp_type="ping",
+                network_segment=segment,
             )
         )
 
@@ -332,3 +374,111 @@ def _resolve_hostname(ip_address: str) -> str | None:
         pass
 
     return None
+
+
+def discover_subnets_from_routing_table() -> list[str]:
+    """Auto-detect local subnets by parsing the OS routing table.
+
+    Reads the routing table and returns all directly-connected (non-default)
+    network prefixes in CIDR notation.  Supports Linux (``ip route show``)
+    and Windows (``route print``).
+
+    Returns:
+        Sorted list of CIDR strings, e.g. ``["192.168.1.0/24", "10.0.0.0/8"]``.
+        Returns an empty list if the command fails or no subnets are found.
+    """
+    system = platform.system().lower()
+    if system == "windows":
+        return _parse_windows_routing_table()
+    return _parse_linux_routing_table()
+
+
+def _parse_linux_routing_table() -> list[str]:
+    """Parse `ip route show` to extract directly-connected subnets."""
+    try:
+        result = subprocess.run(
+            ["ip", "route", "show"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except FileNotFoundError:
+        logger.warning("'ip' command not found; cannot auto-detect subnets.")
+        return []
+    except subprocess.TimeoutExpired:
+        logger.warning("'ip route show' timed out.")
+        return []
+
+    subnets: set[str] = set()
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        # Skip default routes and kernel/unreachable entries
+        if line.startswith(("default", "unreachable", "prohibit", "blackhole")):
+            continue
+        # First token is the network (CIDR or bare IP)
+        parts = line.split()
+        if not parts:
+            continue
+        candidate = parts[0]
+        try:
+            net = ipaddress.ip_network(candidate, strict=False)
+            # Only include private / RFC-1918 / link-local subnets with prefix ≥ /8
+            if net.prefixlen >= 8:
+                subnets.add(str(net))
+        except ValueError:
+            pass
+
+    discovered = sorted(subnets)
+    logger.info("Routing table: discovered %d subnet(s): %s", len(discovered), discovered)
+    return discovered
+
+
+def _process_windows_route_line(stripped: str, ipv4_section: bool, subnets: set[str]) -> bool:
+    """Process one stripped line from ``route print``; returns updated *ipv4_section* flag."""
+    if "IPv4 Route Table" in stripped or "Active Routes" in stripped:
+        return True
+    if not ipv4_section:
+        return False
+    if not stripped or stripped.startswith(("Network", "=", "Default")):
+        return ipv4_section
+    parts = stripped.split()
+    if len(parts) < 2:
+        return ipv4_section
+    dest, mask = parts[0], parts[1]
+    if dest in ("0.0.0.0", "127.0.0.0"):
+        return ipv4_section
+    try:
+        net = ipaddress.ip_network(f"{dest}/{mask}", strict=False)
+        if net.prefixlen >= 8:
+            subnets.add(str(net))
+    except ValueError:
+        pass
+    return ipv4_section
+
+
+def _parse_windows_routing_table() -> list[str]:
+    """Parse ``route print`` to extract directly-connected subnets (Windows)."""
+    try:
+        result = subprocess.run(
+            ["route", "print", "-4"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except FileNotFoundError:
+        logger.warning("'route' command not found; cannot auto-detect subnets.")
+        return []
+    except subprocess.TimeoutExpired:
+        logger.warning("'route print' timed out.")
+        return []
+
+    subnets: set[str] = set()
+    _ipv4_section = False
+    for line in result.stdout.splitlines():
+        _ipv4_section = _process_windows_route_line(line.strip(), _ipv4_section, subnets)
+
+    discovered = sorted(subnets)
+    logger.info("Routing table: discovered %d subnet(s): %s", len(discovered), discovered)
+    return discovered

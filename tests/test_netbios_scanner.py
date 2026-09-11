@@ -3,6 +3,8 @@
 import struct
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.netbios_scanner import (
     NetBiosInfo,
     _build_nbstat_request,
@@ -15,6 +17,7 @@ from src.netbios_scanner import (
 class TestNetBiosInfo:
     """Tests for NetBiosInfo dataclass."""
 
+    @pytest.mark.timeout(30)
     def test_defaults(self) -> None:
         info = NetBiosInfo(ip_address="192.168.1.10")
         assert info.ip_address == "192.168.1.10"
@@ -26,11 +29,13 @@ class TestNetBiosInfo:
 class TestBuildNbstatRequest:
     """Tests for NBSTAT request packet building."""
 
+    @pytest.mark.timeout(30)
     def test_builds_packet(self) -> None:
         packet = _build_nbstat_request(0x1234)
         assert isinstance(packet, bytes)
         assert len(packet) > 12  # At least header size
 
+    @pytest.mark.timeout(30)
     def test_correct_transaction_id(self) -> None:
         packet = _build_nbstat_request(0xABCD)
         # First 2 bytes are transaction ID
@@ -41,10 +46,12 @@ class TestBuildNbstatRequest:
 class TestParseNbstatResponse:
     """Tests for NBSTAT response parsing."""
 
+    @pytest.mark.timeout(30)
     def test_too_short_response(self) -> None:
         result = _parse_nbstat_response("192.168.1.10", b"\x00" * 10)
         assert result is None
 
+    @pytest.mark.timeout(30)
     def test_valid_response(self) -> None:
         """Test parsing a minimal valid-looking NBSTAT response."""
         # Build a fake response: 56 bytes header area + 1 name count + 1 entry
@@ -64,6 +71,7 @@ class TestParseNbstatResponse:
         assert result.ip_address == "192.168.1.10"
         assert result.mac_address == "AA:BB:CC:DD:EE:FF"
 
+    @pytest.mark.timeout(30)
     def test_zero_mac_ignored(self) -> None:
         """Test that all-zero MACs are ignored."""
         header = b"\x00" * 56
@@ -78,6 +86,7 @@ class TestParseNbstatResponse:
         assert result is not None
         assert result.mac_address == ""
 
+    @pytest.mark.timeout(30)
     def test_with_domain(self) -> None:
         """Test parsing response with both computer name and domain."""
         header = b"\x00" * 56
@@ -103,6 +112,7 @@ class TestResolveNetbiosName:
     """Tests for single NetBIOS name resolution."""
 
     @patch("socket.socket")
+    @pytest.mark.timeout(30)
     def test_timeout_returns_none(self, mock_socket_cls) -> None:
         mock_sock = MagicMock()
         mock_socket_cls.return_value = mock_sock
@@ -112,6 +122,7 @@ class TestResolveNetbiosName:
         assert result is None
 
     @patch("socket.socket")
+    @pytest.mark.timeout(30)
     def test_os_error_returns_none(self, mock_socket_cls) -> None:
         mock_sock = MagicMock()
         mock_socket_cls.return_value = mock_sock
@@ -125,6 +136,7 @@ class TestResolveNetbiosNames:
     """Tests for batch NetBIOS name resolution."""
 
     @patch("src.netbios_scanner.resolve_netbios_name")
+    @pytest.mark.timeout(30)
     def test_resolves_multiple(self, mock_resolve) -> None:
         mock_resolve.side_effect = [
             NetBiosInfo(ip_address="192.168.1.10", netbios_name="PC1"),
@@ -137,18 +149,21 @@ class TestResolveNetbiosNames:
         assert result[1].netbios_name == "PC3"
 
     @patch("src.netbios_scanner.resolve_netbios_name")
+    @pytest.mark.timeout(30)
     def test_empty_list(self, mock_resolve) -> None:
         result = resolve_netbios_names([])
         assert result == []
         mock_resolve.assert_not_called()
 
     @patch("src.netbios_scanner.resolve_netbios_name")
+    @pytest.mark.timeout(30)
     def test_all_failed(self, mock_resolve) -> None:
         mock_resolve.return_value = None
         result = resolve_netbios_names(["192.168.1.10", "192.168.1.20"])
         assert result == []
 
     @patch("src.netbios_scanner.resolve_netbios_name")
+    @pytest.mark.timeout(30)
     def test_empty_name_excluded(self, mock_resolve) -> None:
         mock_resolve.return_value = NetBiosInfo(ip_address="192.168.1.10", netbios_name="")
         result = resolve_netbios_names(["192.168.1.10"])

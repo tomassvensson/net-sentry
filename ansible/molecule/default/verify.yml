@@ -1,0 +1,67 @@
+---
+# Molecule verify playbook — asserts post-convergence state without requiring
+# an active systemd service (container may not run a full init daemon).
+#
+# Checks:
+#   1. Expected OS user and group exist.
+#   2. Installation directory and Python virtual-environment are present.
+#   3. net-sentry package is importable inside the venv.
+#   4. systemd unit file is deployed (even if the service is not running).
+
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    net_sentry_home: /opt/net-sentry
+    net_sentry_user: net-sentry
+    net_sentry_group: net-sentry
+    net_sentry_venv: /opt/net-sentry/.venv
+
+  tasks:
+    - name: Check that the net-sentry OS group exists
+      ansible.builtin.command: getent group {{ net_sentry_group }}
+      changed_when: false
+
+    - name: Check that the net-sentry OS user exists
+      ansible.builtin.command: getent passwd {{ net_sentry_user }}
+      changed_when: false
+
+    - name: Stat the installation directory
+      ansible.builtin.stat:
+        path: "{{ net_sentry_home }}"
+      register: _install_dir
+
+    - name: Assert installation directory exists
+      ansible.builtin.assert:
+        that: _install_dir.stat.isdir
+        fail_msg: "Installation directory {{ net_sentry_home }} not found"
+
+    - name: Stat the Python virtual environment
+      ansible.builtin.stat:
+        path: "{{ net_sentry_venv }}/bin/python"
+      register: _venv_python
+
+    - name: Assert virtual environment exists
+      ansible.builtin.assert:
+        that: _venv_python.stat.exists
+        fail_msg: "Python venv not found at {{ net_sentry_venv }}"
+
+    - name: Verify net-sentry package is importable
+      ansible.builtin.command:
+        cmd: "{{ net_sentry_venv }}/bin/python -c 'import src.main; print(\"OK\")'
+        "
+      register: _import_result
+      changed_when: false
+      failed_when: "'OK' not in _import_result.stdout"
+
+    - name: Stat the systemd unit file
+      ansible.builtin.stat:
+        path: /etc/systemd/system/net-sentry.service
+      register: _unit_file
+
+    - name: Assert systemd unit file is deployed
+      ansible.builtin.assert:
+        that: _unit_file.stat.exists
+        fail_msg: "Systemd unit file /etc/systemd/system/net-sentry.service is missing"

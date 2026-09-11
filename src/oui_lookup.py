@@ -1,17 +1,84 @@
-"""MAC address to vendor/brand name translation using IEEE OUI database."""
+"""MAC address to vendor/brand name translation using IEEE OUI database.
 
+The lookup strategy (highest priority first):
+
+1. ``mac-vendor-lookup`` library with its own cached database (best coverage).
+2. Local IEEE OUI CSV at ``src/data/oui.csv`` downloaded by
+   ``scripts/update_oui_db.py`` (fast, offline-capable, auto-updated weekly
+   via the ``oui-update`` GitHub Actions workflow).
+3. Built-in static fallback dict ``_BUILTIN_OUI`` (limited but always present).
+"""
+
+from __future__ import annotations
+
+import csv
+import functools
+import inspect
 import logging
 import re
+import warnings
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Path to the locally cached IEEE OUI CSV (populated by scripts/update_oui_db.py)
+_OUI_CSV_PATH = Path(__file__).parent / "data" / "oui.csv"
 
 # Try to use mac_vendor_lookup if available, otherwise fall back to built-in
 _mac_lookup = None
 _INIT_ATTEMPTED = False
+# Vendors loaded from the local OUI CSV (populated lazily on first use)
+_csv_vendors: dict[str, str] | None = None
+_CSV_LOAD_ATTEMPTED = False
+
+
+def _load_oui_csv() -> dict[str, str]:
+    """Load vendor names from the locally cached IEEE OUI CSV.
+
+    The CSV has this header::
+
+        Registry,Assignment,Organization Name,Organization Address
+
+    The ``Assignment`` column contains the 6-hex-digit OUI (no colons).
+
+    Returns:
+        Dict mapping ``XX:XX:XX`` (uppercase, colon-separated) to vendor name.
+        Empty dict if the file does not exist or cannot be parsed.
+    """
+    global _csv_vendors, _CSV_LOAD_ATTEMPTED
+    if _CSV_LOAD_ATTEMPTED:
+        # _csv_vendors is always a dict after the first call (may be empty)
+        return _csv_vendors if _csv_vendors is not None else {}
+    _CSV_LOAD_ATTEMPTED = True
+    _csv_vendors = {}
+
+    if not _OUI_CSV_PATH.exists():
+        logger.debug("Local OUI CSV not found at %s — using built-in fallback.", _OUI_CSV_PATH)
+        return _csv_vendors
+    try:
+        with _OUI_CSV_PATH.open(newline="", encoding="utf-8", errors="replace") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                assignment = row.get("Assignment", "").strip().upper()
+                name = row.get("Organization Name", "").strip()
+                if len(assignment) == 6 and name:
+                    oui_key = f"{assignment[0:2]}:{assignment[2:4]}:{assignment[4:6]}"
+                    _csv_vendors[oui_key] = name
+        logger.info("Loaded %d OUI entries from %s.", len(_csv_vendors), _OUI_CSV_PATH)
+    except Exception:
+        logger.exception("Failed to load local OUI CSV.")
+
+    return _csv_vendors
 
 
 def _init_mac_lookup() -> None:
-    """Initialize the MAC vendor lookup instance (lazy)."""
+    """Initialize the MAC vendor lookup instance (lazy).
+
+    mac_vendor_lookup calls ``asyncio.get_event_loop()`` in its constructor,
+    which emits a DeprecationWarning in Python 3.10+ when there is no current
+    event loop (e.g. during pytest collection). Suppress that specific warning
+    here (J: asyncio.get_event_loop deprecation fix).
+    """
     global _mac_lookup, _INIT_ATTEMPTED
     if _INIT_ATTEMPTED:
         return
@@ -19,7 +86,13 @@ def _init_mac_lookup() -> None:
     try:
         from mac_vendor_lookup import MacLookup
 
-        _mac_lookup = MacLookup()
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="There is no current event loop",
+                category=DeprecationWarning,
+            )
+            _mac_lookup = MacLookup()
         logger.info("MAC vendor lookup database loaded.")
     except ImportError:
         logger.warning("mac-vendor-lookup not installed. Vendor lookup will use built-in fallback.")
@@ -653,11 +726,63 @@ def get_oui_prefix(mac_address: str) -> str:
     return normalized[:8]
 
 
+@functools.lru_cache(maxsize=4096)
+def _cached_lookup_by_prefix(prefix: str) -> str | None:
+    """Return vendor name for a normalised OUI prefix (XX:XX:XX, uppercase).
+
+    Results are cached in an LRU cache (up to 4096 entries) so repeated
+    lookups for the same prefix — which is very common in scanning workloads
+    — pay no per-call cost after the first hit.
+
+    The cache is intentionally kept separate from :func:`lookup_vendor` so
+    that it operates on the already-normalised prefix string and is
+    independent of the various input formats accepted by ``lookup_vendor``.
+
+    Args:
+        prefix: OUI prefix in ``XX:XX:XX`` upper-case colon-separated format.
+
+    Returns:
+        Vendor name string, or ``None`` if not found.
+    """
+    # Check the local IEEE OUI CSV first (usually more complete)
+    csv_vendor = _load_oui_csv().get(prefix)
+    if csv_vendor:
+        return csv_vendor
+
+    # Fall back to built-in static table
+    return _BUILTIN_OUI.get(prefix)
+
+
+def _try_mac_vendor_lookup(normalized: str) -> str | None:
+    """Try the mac-vendor-lookup library; returns vendor string or ``None``."""
+    if _mac_lookup is None:
+        return None
+    try:
+        lookup = _mac_lookup.lookup
+        if inspect.iscoroutinefunction(lookup):
+            logger.debug("mac-vendor-lookup uses async lookup; trying CSV fallback.")
+            return None
+        lookup_result = lookup(normalized)
+        if inspect.isawaitable(lookup_result):
+            close = getattr(lookup_result, "close", None)
+            if callable(close):
+                close()
+            logger.debug("mac-vendor-lookup returned an async lookup; trying CSV fallback.")
+            return None
+        return str(lookup_result) if lookup_result else None
+    except Exception:
+        logger.debug("mac-vendor-lookup failed, trying CSV fallback.")
+        return None
+
+
 def lookup_vendor(mac_address: str) -> str | None:
     """Look up the vendor/manufacturer for a MAC address.
 
-    Tries the mac-vendor-lookup library first, then falls back to
-    the built-in OUI table.
+    Tries (in order):
+    1. ``mac-vendor-lookup`` library with its cached database.
+    2. Local IEEE OUI CSV (``src/data/oui.csv``) downloaded by the weekly
+       ``oui-update`` workflow.
+    3. Built-in static OUI table (limited but always available).
 
     Args:
         mac_address: MAC address in any common format.
@@ -668,26 +793,22 @@ def lookup_vendor(mac_address: str) -> str | None:
     try:
         normalized = normalize_mac(mac_address)
     except ValueError:
-        logger.warning("Cannot lookup vendor for invalid MAC: %s", mac_address)
+        logger.warning("Cannot lookup vendor for invalid MAC input.")
         return None
 
-    # Try the full database first
+    # 1 — Try the full mac-vendor-lookup library
     _init_mac_lookup()
-    if _mac_lookup is not None:
-        try:
-            vendor: str | None = _mac_lookup.lookup(normalized)
-            if vendor:
-                return vendor
-        except Exception:
-            logger.debug("mac-vendor-lookup failed for %s, trying builtin.", normalized)
-
-    # Fall back to built-in OUI table
-    prefix = get_oui_prefix(normalized)
-    vendor = _BUILTIN_OUI.get(prefix)
+    vendor = _try_mac_vendor_lookup(normalized)
     if vendor:
         return vendor
 
-    logger.debug("No vendor found for MAC %s (OUI prefix %s).", normalized, prefix)
+    # 2+3 — Try the local IEEE OUI CSV then built-in table (cached per prefix)
+    prefix = get_oui_prefix(normalized)
+    cached = _cached_lookup_by_prefix(prefix)
+    if cached:
+        return cached
+
+    logger.debug("No vendor found for requested MAC.")
     return None
 
 
@@ -711,3 +832,25 @@ def is_randomized_mac(mac_address: str) -> bool:
 
     first_byte = int(normalized[:2], 16)
     return bool(first_byte & 0x02)
+
+
+def is_multicast_mac(mac_address: str) -> bool:
+    """Check if a MAC address is multicast/group addressed.
+
+    The least-significant bit of the first octet marks Ethernet multicast.
+    IPv6 neighbor tables commonly contain ``33:33:*`` multicast mappings;
+    those are protocol groups, not devices.
+
+    Args:
+        mac_address: MAC address in any common format.
+
+    Returns:
+        True if the MAC is multicast/group addressed.
+    """
+    try:
+        normalized = normalize_mac(mac_address)
+    except ValueError:
+        return False
+
+    first_byte = int(normalized[:2], 16)
+    return bool(first_byte & 0x01)

@@ -5,7 +5,7 @@ Publishes device discovery and scan events to an MQTT broker.
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +24,10 @@ class MqttPublisher:
         self,
         broker_host: str = "localhost",
         broker_port: int = 1883,
-        topic_prefix: str = "btwifi",
+        topic_prefix: str = "net-sentry",
         username: str | None = None,
         password: str | None = None,
-        client_id: str = "btwifi-scanner",
+        client_id: str = "net-sentry-scanner",
     ) -> None:
         """Initialize MQTT publisher.
 
@@ -46,11 +46,11 @@ class MqttPublisher:
 
         if mqtt is None:
             logger.error("paho-mqtt not installed. MQTT publishing disabled.")
-            self._client: mqtt.Client | None = None  # type: ignore[union-attr]
+            self._client: mqtt.Client | None = None
             return
 
         self._client = mqtt.Client(
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,  # type: ignore[attr-defined]
             client_id=client_id,
         )
         if username:
@@ -143,7 +143,7 @@ class MqttPublisher:
             "vendor": vendor,
             "device_name": device_name,
             "signal_dbm": signal_dbm,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         try:
@@ -156,7 +156,7 @@ class MqttPublisher:
             logger.warning("MQTT publish failed with rc=%s", result.rc)
             return False
         except Exception:
-            logger.exception("MQTT publish error for %s", mac_address)
+            logger.exception("MQTT publish error for device event")
             from src.metrics import MQTT_ERRORS
 
             MQTT_ERRORS.inc()
@@ -189,7 +189,7 @@ class MqttPublisher:
             "bluetooth_count": bluetooth_count,
             "arp_count": arp_count,
             "total_devices": total_devices,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         try:

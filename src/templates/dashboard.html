@@ -3,8 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BtWiFi Device Tracker</title>
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <meta name="description" content="Net Sentry — track which WiFi, Bluetooth, and network devices are visible, when, and how strongly.">
+    <title>Net Sentry Device Tracker</title>
+    <link rel="icon" href="data:,">
+    <link rel="preconnect" href="https://unpkg.com" crossorigin>
+    <script src="/static/js/htmx.min.js" defer></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+            // Automatically send CSRF token with all HTMX mutating requests
+            document.body.addEventListener("htmx:configRequest", function (evt) {
+                var csrfToken = document.cookie.split("; ").reduce(function (acc, c) {
+                    var parts = c.split("=");
+                    return parts[0] === "csrftoken" ? parts[1] : acc;
+                }, "");
+                if (csrfToken) {
+                    evt.detail.headers["X-CSRFToken"] = csrfToken;
+                }
+            });
+        });
+    </script>
     <style>
         :root {
             --bg: #1a1a2e;
@@ -114,7 +131,8 @@
         .badge-netbios { background: #4527a0; color: #fff; }
         .signal-good { color: var(--success); }
         .signal-fair { color: var(--warning); }
-        .signal-weak { color: var(--accent); }
+        .signal-weak { color: #d03060; }
+        [data-theme="light"] .signal-weak { color: #c62828; }
         .pagination {
             display: flex;
             justify-content: center;
@@ -131,7 +149,7 @@
 </head>
 <body>
     <div class="header">
-        <h1>BtWiFi Device Tracker</h1>
+        <h1>Net Sentry Device Tracker</h1>
         <div class="stats">
             <div class="stat">
                 <div class="stat-value">{{ total_devices }}</div>
@@ -143,10 +161,11 @@
             <button class="btn" hx-get="/api/v1/devices-table?page=1" hx-target="#device-table-body" hx-swap="innerHTML">
                 Refresh
             </button>
-            <button id="theme-toggle" onclick="toggleTheme()">🌓</button>
+            <button id="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">🌓</button>
         </div>
     </div>
 
+    <main>
     <div class="container">
         <table>
             <thead>
@@ -167,7 +186,7 @@
                    hx-swap="innerHTML">
                 {% for item in devices %}
                 <tr>
-                    <td><code>{{ item.device.mac_address }}</code></td>
+                    <td><a href="/devices/{{ item.device.mac_address }}" style="color:inherit;text-decoration:underline dotted;"><code>{{ item.device.mac_address }}</code></a></td>
                     <td>
                         {% if 'wifi' in item.device.device_type %}
                         <span class="badge badge-wifi">{{ item.device.device_type }}</span>
@@ -206,18 +225,19 @@
             </tbody>
         </table>
     </div>
+    </main>
 
     <script>
+        const _THEME_KEY = 'net-sentry-theme';
         function toggleTheme() {
             const html = document.documentElement;
-            const current = html.getAttribute('data-theme');
-            const next = current === 'dark' ? 'light' : 'dark';
-            html.setAttribute('data-theme', next);
-            localStorage.setItem('btwifi-theme', next);
+            const next = html.dataset.theme === 'dark' ? 'light' : 'dark';
+            html.dataset.theme = next;
+            localStorage.setItem(_THEME_KEY, next);
         }
-        // Restore saved theme
-        const saved = localStorage.getItem('btwifi-theme');
-        if (saved) document.documentElement.setAttribute('data-theme', saved);
+        // Restore saved theme (G: dark-mode persistence)
+        const saved = localStorage.getItem(_THEME_KEY);
+        if (saved) document.documentElement.dataset.theme = saved;
     </script>
 </body>
 </html>

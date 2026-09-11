@@ -1,0 +1,124 @@
+---
+# Ansible role: net-sentry
+# Installs and configures the Net Sentry device visibility tracker as a
+# systemd service on a Debian/Ubuntu host.
+#
+# Variables (set in vars/main.yml or via inventory):
+#   net_sentry_user          — OS user to run the service (default: net-sentry)
+#   net_sentry_group         — OS group                   (default: net-sentry)
+#   net_sentry_home          — Installation directory     (default: /opt/net-sentry)
+#   net_sentry_venv          — Python venv path           (default: {{ net_sentry_home }}/.venv)
+#   net_sentry_repo          — Git repository URL         (default: https://github.com/tomassvensson/btwf.git)
+#   net_sentry_version       — Git branch/tag/commit      (default: main)
+#   net_sentry_python        — Python interpreter         (default: python3)
+#   net_sentry_db_url        — SQLAlchemy database URL    (default: sqlite:///{{ net_sentry_home }}/net-sentry.db)
+#   net_sentry_config_source — Local config.yaml to deploy (optional, no default)
+#   net_sentry_json_logging  — Enable JSON logging        (default: false)
+#   net_sentry_tracing       — Enable OTEL tracing        (default: false)
+
+- name: Create net-sentry system group
+  ansible.builtin.group:
+    name: "{{ net_sentry_group }}"
+    system: true
+    state: present
+
+- name: Create net-sentry system user
+  ansible.builtin.user:
+    name: "{{ net_sentry_user }}"
+    group: "{{ net_sentry_group }}"
+    home: "{{ net_sentry_home }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: true
+    state: present
+
+- name: Install system dependencies
+  ansible.builtin.apt:
+    name:
+      - git
+      - python3
+      - python3-venv
+      - python3-pip
+      - libpcap-dev   # required for scapy/monitor-mode scanning
+    state: present
+    update_cache: true
+  become: true
+
+- name: Clone / update Net Sentry repository
+  ansible.builtin.git:
+    repo: "{{ net_sentry_repo }}"
+    dest: "{{ net_sentry_home }}"
+    version: "{{ net_sentry_version }}"
+    force: false
+    update: true
+  become: true
+  become_user: "{{ net_sentry_user }}"
+  notify: Restart net-sentry
+
+- name: Create Python virtual environment
+  ansible.builtin.command:
+    cmd: "{{ net_sentry_python }} -m venv {{ net_sentry_venv }}"
+    creates: "{{ net_sentry_venv }}/bin/python"
+  become: true
+  become_user: "{{ net_sentry_user }}"
+
+- name: Install Python dependencies
+  ansible.builtin.pip:
+    requirements: "{{ net_sentry_home }}/requirements.txt"
+    virtualenv: "{{ net_sentry_venv }}"
+    state: present
+  become: true
+  become_user: "{{ net_sentry_user }}"
+  notify: Restart net-sentry
+
+- name: Install the net-sentry package itself (editable)
+  ansible.builtin.pip:
+    name: "{{ net_sentry_home }}"
+    extra_args: "-e"
+    virtualenv: "{{ net_sentry_venv }}"
+    state: present
+  become: true
+  become_user: "{{ net_sentry_user }}"
+  notify: Restart net-sentry
+
+- name: Deploy config.yaml (when net_sentry_config_source is defined)
+  ansible.builtin.copy:
+    src: "{{ net_sentry_config_source }}"
+    dest: "{{ net_sentry_home }}/config.yaml"
+    owner: "{{ net_sentry_user }}"
+    group: "{{ net_sentry_group }}"
+    mode: "0640"
+  when: net_sentry_config_source is defined
+  become: true
+  notify: Restart net-sentry
+
+- name: Run Alembic database migrations
+  ansible.builtin.command:
+    cmd: "{{ net_sentry_venv }}/bin/alembic upgrade head"
+    chdir: "{{ net_sentry_home }}"
+  become: true
+  become_user: "{{ net_sentry_user }}"
+  environment:
+    DATABASE_URL: "{{ net_sentry_db_url }}"
+  changed_when: false  # Alembic is idempotent; skip change detection
+
+- name: Deploy systemd service unit
+  ansible.builtin.template:
+    src: net-sentry.service.j2
+    dest: /etc/systemd/system/net-sentry.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify:
+    - Reload systemd
+    - Restart net-sentry
+
+- name: Enable and start net-sentry service
+  ansible.builtin.systemd:
+    name: net-sentry
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+  when: not (net_sentry_skip_service_start | default(false) | bool)

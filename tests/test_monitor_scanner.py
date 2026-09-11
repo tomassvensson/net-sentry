@@ -2,12 +2,15 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.monitor_scanner import MonitorModeDevice, is_scapy_available, scan_monitor_mode
 
 
 class TestMonitorModeDeviceDataclass:
     """Tests for MonitorModeDevice dataclass."""
 
+    @pytest.mark.timeout(30)
     def test_defaults(self) -> None:
         d = MonitorModeDevice(mac_address="AA:BB:CC:DD:EE:FF")
         assert d.signal_dbm is None
@@ -17,6 +20,7 @@ class TestMonitorModeDeviceDataclass:
         assert d.channel is None
         assert d.scan_time is not None
 
+    @pytest.mark.timeout(30)
     def test_repr(self) -> None:
         d = MonitorModeDevice(
             mac_address="AA:BB:CC:DD:EE:FF",
@@ -33,10 +37,12 @@ class TestIsScapyAvailable:
     """Tests for is_scapy_available."""
 
     @patch.dict("sys.modules", {"scapy": MagicMock(), "scapy.all": MagicMock()})
+    @pytest.mark.timeout(30)
     def test_scapy_installed(self) -> None:
         assert is_scapy_available() is True
 
     @patch.dict("sys.modules", {"scapy": None, "scapy.all": None})
+    @pytest.mark.timeout(30)
     def test_scapy_not_installed(self) -> None:
         # Importing scapy.all when set to None in sys.modules raises ImportError
         assert is_scapy_available() is False
@@ -46,12 +52,14 @@ class TestScanMonitorMode:
     """Tests for scan_monitor_mode function."""
 
     @patch("src.monitor_scanner.is_scapy_available", return_value=False)
+    @pytest.mark.timeout(30)
     def test_returns_empty_when_scapy_missing(self, _mock) -> None:
         result = scan_monitor_mode()
         assert result == []
 
     @patch("src.monitor_scanner._capture_frames")
     @patch("src.monitor_scanner.is_scapy_available", return_value=True)
+    @pytest.mark.timeout(30)
     def test_delegates_to_capture(self, _mock_avail, mock_capture) -> None:
         mock_capture.return_value = [MonitorModeDevice(mac_address="AA:BB:CC:DD:EE:FF", frame_type="beacon")]
         result = scan_monitor_mode(interface="wlan0mon", duration_seconds=10)
@@ -61,12 +69,14 @@ class TestScanMonitorMode:
 
     @patch("src.monitor_scanner._capture_frames", side_effect=PermissionError("denied"))
     @patch("src.monitor_scanner.is_scapy_available", return_value=True)
+    @pytest.mark.timeout(30)
     def test_handles_permission_error(self, _mock_avail, _mock_capture) -> None:
         result = scan_monitor_mode()
         assert result == []
 
     @patch("src.monitor_scanner._capture_frames", side_effect=OSError("interface error"))
     @patch("src.monitor_scanner.is_scapy_available", return_value=True)
+    @pytest.mark.timeout(30)
     def test_handles_generic_error(self, _mock_avail, _mock_capture) -> None:
         result = scan_monitor_mode()
         assert result == []
@@ -76,6 +86,7 @@ class TestCaptureFrames:
     """Tests for _capture_frames with mocked scapy."""
 
     @patch("src.monitor_scanner.is_scapy_available", return_value=True)
+    @pytest.mark.timeout(30)
     def test_capture_with_mocked_sniff(self, _mock_avail) -> None:
         """Test frame processing logic with mocked scapy."""
         mock_sniff = MagicMock()

@@ -1,7 +1,7 @@
 """Tests for FastAPI application and REST API endpoints."""
 
 from collections.abc import Generator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
@@ -32,7 +32,7 @@ def db_engine():
 def client(db_engine):
     """Create a test client with dependency override."""
 
-    def _override_get_db() -> Generator[Session, None, None]:
+    def _override_get_db() -> Generator[Session]:
         with get_session(db_engine) as session:
             yield session
 
@@ -47,7 +47,7 @@ def client(db_engine):
 @pytest.fixture()
 def seeded_client(db_engine):
     """Create a test client with seeded data."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with get_session(db_engine) as session:
         d = Device(
             mac_address="AA:BB:CC:DD:EE:FF",
@@ -73,7 +73,7 @@ def seeded_client(db_engine):
         )
         session.add(w)
 
-    def _override_get_db() -> Generator[Session, None, None]:
+    def _override_get_db() -> Generator[Session]:
         with get_session(db_engine) as session:
             yield session
 
@@ -88,6 +88,7 @@ def seeded_client(db_engine):
 class TestHealthCheck:
     """Tests for /api/v1/health endpoint."""
 
+    @pytest.mark.timeout(30)
     def test_healthy_with_db(self, client) -> None:
         resp = client.get("/api/v1/health")
         assert resp.status_code == 200
@@ -96,6 +97,7 @@ class TestHealthCheck:
         assert data["database"]["connected"] is True
         assert "timestamp" in data
 
+    @pytest.mark.timeout(30)
     def test_degraded_without_engine(self) -> None:
         set_engine(None)
         app.dependency_overrides.clear()
@@ -109,17 +111,19 @@ class TestHealthCheck:
 class TestPrometheusMetrics:
     """Tests for /metrics endpoint."""
 
+    @pytest.mark.timeout(30)
     def test_metrics_returns_text(self, client) -> None:
         import src.metrics  # noqa: F401 — ensure metrics registered
 
         resp = client.get("/metrics")
         assert resp.status_code == 200
-        assert "btwifi" in resp.text
+        assert "net_sentry" in resp.text
 
 
 class TestListDevices:
     """Tests for GET /api/v1/devices."""
 
+    @pytest.mark.timeout(30)
     def test_empty_db(self, client) -> None:
         resp = client.get("/api/v1/devices")
         assert resp.status_code == 200
@@ -127,18 +131,21 @@ class TestListDevices:
         assert data["total"] == 0
         assert data["devices"] == []
 
+    @pytest.mark.timeout(30)
     def test_with_data(self, seeded_client) -> None:
         resp = seeded_client.get("/api/v1/devices")
         data = resp.json()
         assert data["total"] == 1
         assert data["devices"][0]["mac_address"] == "AA:BB:CC:DD:EE:FF"
 
+    @pytest.mark.timeout(30)
     def test_pagination_params(self, client) -> None:
         resp = client.get("/api/v1/devices?page=2&page_size=10")
         data = resp.json()
         assert data["page"] == 2
         assert data["page_size"] == 10
 
+    @pytest.mark.timeout(30)
     def test_device_type_filter(self, seeded_client) -> None:
         resp = seeded_client.get("/api/v1/devices?device_type=bluetooth")
         data = resp.json()
@@ -152,6 +159,7 @@ class TestListDevices:
 class TestGetDevice:
     """Tests for GET /api/v1/devices/{mac_address}."""
 
+    @pytest.mark.timeout(30)
     def test_existing_device(self, seeded_client) -> None:
         resp = seeded_client.get("/api/v1/devices/AA:BB:CC:DD:EE:FF")
         data = resp.json()
@@ -160,6 +168,7 @@ class TestGetDevice:
         assert data["latest_window"] is not None
         assert data["latest_window"]["scan_count"] == 3
 
+    @pytest.mark.timeout(30)
     def test_missing_device(self, client) -> None:
         resp = client.get("/api/v1/devices/00:00:00:00:00:00")
         data = resp.json()
@@ -169,12 +178,14 @@ class TestGetDevice:
 class TestGetDeviceWindows:
     """Tests for GET /api/v1/devices/{mac}/windows."""
 
+    @pytest.mark.timeout(30)
     def test_device_windows(self, seeded_client) -> None:
         resp = seeded_client.get("/api/v1/devices/AA:BB:CC:DD:EE:FF/windows")
         data = resp.json()
         assert data["total"] == 1
         assert data["windows"][0]["signal_strength_dbm"] == pytest.approx(-50.0)
 
+    @pytest.mark.timeout(30)
     def test_no_windows(self, client) -> None:
         resp = client.get("/api/v1/devices/00:00:00:00:00:00/windows")
         data = resp.json()
@@ -184,12 +195,14 @@ class TestGetDeviceWindows:
 class TestSummary:
     """Tests for GET /api/v1/summary."""
 
+    @pytest.mark.timeout(30)
     def test_summary_empty(self, client) -> None:
         resp = client.get("/api/v1/summary")
         data = resp.json()
         assert data["total_devices"] == 0
         assert "timestamp" in data
 
+    @pytest.mark.timeout(30)
     def test_summary_with_data(self, seeded_client) -> None:
         resp = seeded_client.get("/api/v1/summary")
         data = resp.json()
@@ -200,11 +213,13 @@ class TestSummary:
 class TestDashboard:
     """Tests for GET / (HTMX dashboard)."""
 
+    @pytest.mark.timeout(30)
     def test_dashboard_renders(self, client) -> None:
         resp = client.get("/")
         assert resp.status_code == 200
-        assert "BtWiFi" in resp.text
+        assert "Net Sentry" in resp.text
 
+    @pytest.mark.timeout(30)
     def test_dashboard_with_data(self, seeded_client) -> None:
         resp = seeded_client.get("/")
         assert resp.status_code == 200
@@ -214,6 +229,7 @@ class TestDashboard:
 class TestDevicesTableFragment:
     """Tests for GET /api/v1/devices-table (HTMX fragment)."""
 
+    @pytest.mark.timeout(30)
     def test_fragment_renders(self, client) -> None:
         resp = client.get("/api/v1/devices-table")
         assert resp.status_code == 200
@@ -222,10 +238,11 @@ class TestDevicesTableFragment:
 class TestSetEngine:
     """Tests for set_engine helper."""
 
+    @pytest.mark.timeout(30)
     def test_set_and_clear(self, db_engine) -> None:
         from collections.abc import Generator
 
-        def _override() -> Generator[Session, None, None]:
+        def _override() -> Generator[Session]:
             with get_session(db_engine) as session:
                 yield session
 
@@ -241,6 +258,7 @@ class TestSetEngine:
 class TestSerializeDevice:
     """Tests for _serialize_device helper."""
 
+    @pytest.mark.timeout(30)
     def test_serialize_fields(self, seeded_client) -> None:
         resp = seeded_client.get("/api/v1/devices/AA:BB:CC:DD:EE:FF")
         data = resp.json()

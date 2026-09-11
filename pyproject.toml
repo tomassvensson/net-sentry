@@ -1,16 +1,15 @@
 [project]
-name = "btwifi"
+name = "net-sentry"
 version = "0.1.0"
-description = "Track WiFi and Bluetooth device visibility over time"
-requires-python = ">=3.10"
+description = "Net Sentry — Track WiFi, Bluetooth, and network device visibility over time"
+requires-python = ">= 3.13"
 readme = "README.md"
-license = {text = "Private"}
+license = {text = "MIT"}
 
 dependencies = [
     "sqlalchemy>=2.0",
     "mac-vendor-lookup>=0.1.12",
     "aiohttp>=3.13.5",
-    "zeroconf>=0.131.0",
     "tabulate>=0.9.0",
     "pyyaml>=6.0",
     "fastapi>=0.115.0",
@@ -19,33 +18,75 @@ dependencies = [
     "alembic>=1.15.0",
     "prometheus-client>=0.21.0",
     "paho-mqtt>=2.1.0",
+    "slowapi>=0.1.9",
+    "python-jose[cryptography]>=3.3.0",
+    "bcrypt>=4.0",
+    "bleak>=0.22.3",
+    "pysnmp>=6.2",
+    "python-multipart>=0.0.9",
+    "python-json-logger>=3.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=9.0.3",
-    "pytest-cov>=5.0",
+    "pytest-cov>=4.1,<8.0",
     "pytest-timeout>=2.3",
-    "ruff>=0.4",
-    "mypy>=1.10",
+    "pytest-asyncio>=0.23",
+    "ruff==0.15.13",
+    "mypy==2.1.0",
     "types-pyyaml>=6.0",
     "types-tabulate>=0.9",
     "httpx>=0.27.0",
+    "bandit>=1.7",
+    "pre-commit>=3.7",
+    # Integration tests (TestContainers)
+    "testcontainers[postgres]>=4.8.0",
+    "pg8000>=1.31.0",
+    "docker>=7.0.0",
+    # E2E tests (Playwright — Apache 2.0)
+    "playwright>=1.44.0",
+    "pytest-playwright>=0.5.0",
+    # Observability packages (required for tracing/logging tests)
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-instrumentation-fastapi>=0.41b0",
 ]
 monitor = [
     "scapy>=2.5",
 ]
+observability = [
+    # OTLP gRPC exporter for sending traces/metrics to an OpenTelemetry Collector
+    # Install with:  pip install "net-sentry[observability]"
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20",
+]
 
 [project.scripts]
+net-sentry = "src.main:main"
+# Keep btwifi alias for backwards-compatibility during transition
 btwifi = "src.main:main"
+
+# Entry-point group for third-party scanner plugins.
+# Third-party packages can register a ScannerPlugin subclass here.
+# Example:  my_scanner = "my_package.my_scanner:MyScanner"
+[project.entry-points."net_sentry.scanners"]
+snmp = "src.snmp_scanner:SnmpScanner"
+
+# Legacy entry-point group kept for plugins published against the old name
+[project.entry-points."btwifi.scanners"]
+snmp = "src.snmp_scanner:SnmpScanner"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--tb=short -q --timeout=30"
+asyncio_mode = "strict"
+markers = [
+    "integration: integration tests requiring Docker (deselect with -m 'not integration')",
+    "e2e: end-to-end browser tests requiring Playwright (deselect with -m 'not e2e')",
+]
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH"]
@@ -54,11 +95,24 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH"]
 "src/api.py" = ["B008"]  # FastAPI Depends() in default args is standard pattern
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.13"
+# Incremental approach to strict mode — enable individual checks rather than strict = true
+# until all type errors across third-party stubs are resolved.
 warn_return_any = true
 warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
 disallow_untyped_defs = true
+disallow_incomplete_defs = true
 check_untyped_defs = true
+no_implicit_optional = true
+no_implicit_reexport = true
+ignore_missing_imports = true  # third-party libs without stubs
+
+# Per-module overrides for legacy / generated code
+[[tool.mypy.overrides]]
+module = ["alembic.*", "alembic.versions.*"]
+ignore_errors = true
 
 [build-system]
 requires = ["setuptools>=68.0"]

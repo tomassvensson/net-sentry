@@ -1,18 +1,40 @@
-"""Database session management for BtWiFi."""
+"""Database session management for Net Sentry."""
 
 import logging
 import os
+import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import Column, Engine, create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.models import Base
 
+# ---------------------------------------------------------------------------
+# Python 3.12+ SQLite datetime adapter (I: compatibility fix)
+# ---------------------------------------------------------------------------
+# The built-in sqlite3 datetime adapter is deprecated in Python 3.12.
+# Register explicit ISO 8601 adapters so SQLAlchemy works without warnings.
+
+
+def _adapt_datetime_iso(dt: datetime) -> str:
+    """Serialise a datetime to an ISO 8601 string for SQLite storage."""
+    return dt.isoformat()
+
+
+def _convert_datetime_iso(value: bytes) -> datetime:
+    """Deserialise an ISO 8601 byte string back to a datetime."""
+    return datetime.fromisoformat(value.decode())
+
+
+sqlite3.register_adapter(datetime, _adapt_datetime_iso)
+sqlite3.register_converter("datetime", _convert_datetime_iso)
+
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DB_URL = "sqlite:///btwifi.db"
+_DEFAULT_DB_URL = "sqlite:///net-sentry.db"
 
 
 def get_database_url() -> str:
@@ -41,6 +63,10 @@ def init_database(database_url: str | None = None) -> Engine:
     Also migrates existing tables by adding any missing columns
     defined in the models (handles schema evolution without Alembic).
 
+    For SQLite databases, enables WAL (Write-Ahead Logging) journal mode
+    which allows concurrent readers while a writer is active, improving
+    performance when the API and scanner run simultaneously.
+
     Args:
         database_url: Database connection string.
 
@@ -48,13 +74,22 @@ def init_database(database_url: str | None = None) -> Engine:
         SQLAlchemy Engine instance with tables created.
     """
     engine = create_db_engine(database_url)
+
+    # Enable WAL mode for SQLite to allow concurrent readers/writers
+    url = (database_url or get_database_url()).lower()
+    if url.startswith("sqlite"):
+        with engine.connect() as conn:
+            conn.execute(text("PRAGMA journal_mode=WAL"))
+            conn.commit()
+        logger.info("SQLite WAL journal mode enabled.")
+
     Base.metadata.create_all(engine)
     _migrate_missing_columns(engine)
     logger.info("Database tables initialized.")
     return engine
 
 
-def _build_default_clause(column: Column, col_type: str) -> str:  # type: ignore[type-arg]
+def _build_default_clause(column: Column, col_type: str) -> str:
     """Build the DEFAULT clause for a column being added via ALTER TABLE.
 
     Args:
@@ -122,7 +157,7 @@ def get_session_factory(engine: Engine) -> sessionmaker:
 
 
 @contextmanager
-def get_session(engine: Engine) -> Generator[Session, None, None]:
+def get_session(engine: Engine) -> Generator[Session]:
     """Context manager for database sessions with automatic commit/rollback.
 
     Args:
@@ -142,3 +177,42 @@ def get_session(engine: Engine) -> Generator[Session, None, None]:
         raise
     finally:
         session.close()
+
+
+def purge_old_windows(engine: Engine, retention_days: int) -> int:
+    """Delete visibility windows older than ``retention_days`` days.
+
+    When ``retention_days`` is 0 (the default), nothing is deleted.
+
+    After deletion, VACUUM is run on SQLite databases to reclaim space.
+
+    Args:
+        engine: SQLAlchemy Engine instance.
+        retention_days: Number of days to keep.  0 = keep forever.
+
+    Returns:
+        Number of rows deleted.
+    """
+    if retention_days <= 0:
+        return 0
+
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    deleted = 0
+
+    with engine.begin() as conn:
+        result = conn.execute(
+            text("DELETE FROM visibility_windows WHERE last_seen < :cutoff"),
+            {"cutoff": cutoff},
+        )
+        deleted = result.rowcount
+
+    if deleted:
+        logger.info("Purged %d visibility windows older than %d days", deleted, retention_days)
+
+    # Reclaim space in SQLite only when rows were actually removed
+    if deleted and "sqlite" in engine.dialect.name.lower():
+        with engine.begin() as conn:
+            conn.execute(text("VACUUM"))
+        logger.debug("SQLite VACUUM completed after purge")
+
+    return deleted

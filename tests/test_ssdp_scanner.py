@@ -2,12 +2,15 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.ssdp_scanner import SsdpDevice, _parse_ssdp_response
 
 
 class TestSsdpDevice:
     """Tests for SsdpDevice dataclass."""
 
+    @pytest.mark.timeout(30)
     def test_defaults(self) -> None:
         dev = SsdpDevice(ip_address="192.168.1.10")
         assert dev.ip_address == "192.168.1.10"
@@ -18,6 +21,7 @@ class TestSsdpDevice:
         assert dev.vendor is None
         assert dev.is_randomized is False
 
+    @pytest.mark.timeout(30)
     def test_custom_values(self) -> None:
         dev = SsdpDevice(
             ip_address="192.168.1.1",
@@ -35,6 +39,7 @@ class TestParseSsdpResponse:
     @patch("src.ssdp_scanner._arp_lookup_mac", return_value="AA:BB:CC:DD:EE:FF")
     @patch("src.ssdp_scanner.lookup_vendor", return_value="TestVendor")
     @patch("src.ssdp_scanner.is_randomized_mac", return_value=False)
+    @pytest.mark.timeout(30)
     def test_valid_response(self, mock_rand, mock_vendor, mock_arp) -> None:
         response = (
             "HTTP/1.1 200 OK\r\n"
@@ -51,6 +56,7 @@ class TestParseSsdpResponse:
         assert device.vendor == "TestVendor"
 
     @patch("src.ssdp_scanner._arp_lookup_mac", return_value="")
+    @pytest.mark.timeout(30)
     def test_no_mac_found(self, mock_arp) -> None:
         response = "HTTP/1.1 200 OK\r\nSERVER: Test/1.0\r\n"
         device = _parse_ssdp_response("192.168.1.1", response)
@@ -59,6 +65,7 @@ class TestParseSsdpResponse:
         assert device.vendor is None
 
     @patch("src.ssdp_scanner._arp_lookup_mac", return_value="")
+    @pytest.mark.timeout(30)
     def test_empty_response(self, mock_arp) -> None:
         device = _parse_ssdp_response("192.168.1.1", "")
         assert device is not None
@@ -69,6 +76,7 @@ class TestScanSsdpDevices:
     """Tests for scan_ssdp_devices function."""
 
     @patch("socket.socket")
+    @pytest.mark.timeout(30)
     def test_timeout_returns_empty(self, mock_socket_cls) -> None:
         from src.ssdp_scanner import scan_ssdp_devices
 
@@ -80,6 +88,7 @@ class TestScanSsdpDevices:
         assert result == []
 
     @patch("socket.socket")
+    @pytest.mark.timeout(30)
     def test_os_error_returns_empty(self, mock_socket_cls) -> None:
         from src.ssdp_scanner import scan_ssdp_devices
 
@@ -93,6 +102,7 @@ class TestArpLookupMac:
     """Tests for SSDP _arp_lookup_mac."""
 
     @patch("subprocess.run")
+    @pytest.mark.timeout(30)
     def test_found_mac(self, mock_run) -> None:
         from src.ssdp_scanner import _arp_lookup_mac
 
@@ -104,6 +114,7 @@ class TestArpLookupMac:
         assert result == "AA:BB:CC:DD:EE:FF"
 
     @patch("subprocess.run")
+    @pytest.mark.timeout(30)
     def test_not_found(self, mock_run) -> None:
         from src.ssdp_scanner import _arp_lookup_mac
 
@@ -112,6 +123,7 @@ class TestArpLookupMac:
         assert result == ""
 
     @patch("subprocess.run", side_effect=Exception("fail"))
+    @pytest.mark.timeout(30)
     def test_exception(self, mock_run) -> None:
         from src.ssdp_scanner import _arp_lookup_mac
 

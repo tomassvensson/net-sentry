@@ -1,18 +1,23 @@
-"""Bluetooth device scanner for Windows.
+"""Bluetooth and BLE device scanner.
 
-Uses PowerShell to query Windows Bluetooth APIs for nearby devices.
-Falls back to WMI queries if the primary method fails.
+Classic Bluetooth scanning uses Windows PowerShell APIs. Linux BLE scanning
+uses bleak when `ble_enabled` is set in the application config.
 
 Security: This is purely passive scanning — no pairing or connections
 are established with discovered devices.
 """
 
+import asyncio
 import json
 import logging
+import os
+import platform
 import re
 import subprocess
+import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Any, Literal
 
 from src.oui_lookup import is_randomized_mac, lookup_vendor, normalize_mac
 
@@ -30,7 +35,7 @@ class BluetoothDevice:
     device_class: str | None = None
     vendor: str | None = None
     is_randomized: bool = False
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:
         """Post-initialization: look up vendor and check for randomization."""
@@ -103,14 +108,31 @@ $devices | ConvertTo-Json -Depth 3
 
 
 def scan_bluetooth_devices() -> list[BluetoothDevice]:
-    """Scan for nearby/known Bluetooth devices using Windows APIs.
+    """Scan for nearby/known classic Bluetooth devices on the current platform.
 
     Returns:
         List of discovered BluetoothDevice objects.
 
     Raises:
-        RuntimeError: If the scan fails completely.
+        RuntimeError: If the Windows scan fails completely.
     """
+    system_name = platform.system().lower()
+    if system_name == "windows":
+        return _scan_windows_bluetooth_devices()
+
+    if system_name == "linux":
+        if _is_wsl():
+            logger.info("Skipping classic Bluetooth scan: direct Bluetooth access is not typically available under WSL")
+            return []
+        logger.info("Skipping classic Bluetooth scan on Linux; use ble_enabled for BLE discovery")
+        return []
+
+    logger.info("Skipping Bluetooth scan: unsupported platform %s", platform.system())
+    return []
+
+
+def _scan_windows_bluetooth_devices() -> list[BluetoothDevice]:
+    """Scan for nearby/known Bluetooth devices using Windows APIs."""
     logger.info("Starting Bluetooth device scan...")
 
     try:
@@ -133,6 +155,140 @@ def scan_bluetooth_devices() -> list[BluetoothDevice]:
         logger.warning("Bluetooth scan had warnings: %s", stderr)
 
     return _parse_bt_output(result.stdout)
+
+
+def scan_ble_devices(
+    timeout_seconds: float = 10.0,
+    scanning_mode: Literal["active", "passive"] = "passive",
+) -> list[BluetoothDevice]:
+    """Scan for BLE devices on Linux using bleak.
+
+    Args:
+        timeout_seconds: How long to scan.
+        scanning_mode: ``"passive"`` (default, no connection established) or
+            ``"active"`` (sends scan-request packets to elicit scan-responses).
+
+    Returns:
+        List of discovered BluetoothDevice objects.
+    """
+    if platform.system().lower() != "linux":
+        return []
+    if _is_wsl():
+        logger.info("Skipping BLE scan: direct Bluetooth access is not typically available under WSL")
+        return []
+
+    logger.info("Starting BLE device scan (mode=%s)...", scanning_mode)
+    try:
+        discovered_devices = _run_ble_discovery(timeout_seconds, scanning_mode=scanning_mode)
+    except ImportError:
+        logger.info("Skipping BLE scan: bleak is not installed")
+        return []
+    except Exception as exc:
+        logger.info("Skipping BLE scan: %s", exc)
+        return []
+
+    devices = _parse_ble_discovery_results(discovered_devices)
+    logger.info("BLE scan complete: found %d devices.", len(devices))
+    return devices
+
+
+async def _discover_ble_devices(
+    timeout_seconds: float,
+    scanning_mode: Literal["active", "passive"] = "passive",
+) -> list[Any]:
+    """Run a bleak discovery round and return the raw device list.
+
+    Args:
+        timeout_seconds: Scan duration.
+        scanning_mode: ``"passive"`` or ``"active"`` (passed to BleakScanner).
+    """
+    from bleak import BleakScanner
+
+    scanner = BleakScanner(scanning_mode=scanning_mode)
+    return list(await scanner.discover(timeout=timeout_seconds))
+
+
+def _run_ble_discovery(timeout_seconds: float, scanning_mode: Literal["active", "passive"] = "passive") -> list[Any]:
+    """Run BLE discovery even when the current thread already has an event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_discover_ble_devices(timeout_seconds, scanning_mode=scanning_mode))
+
+    result: list[Any] = []
+    error: list[Exception] = []
+
+    def _runner() -> None:
+        try:
+            result.extend(asyncio.run(_discover_ble_devices(timeout_seconds, scanning_mode=scanning_mode)))
+        except Exception as exc:  # pragma: no cover  # NOSONAR
+            error.append(exc)
+
+    worker = threading.Thread(target=_runner, daemon=True)
+    worker.start()
+    worker.join()
+
+    if error:
+        raise error[0]
+
+    return result
+
+
+def _process_ble_item(
+    ble_device: object,
+    advertisement: object | None,
+    seen_macs: set[str],
+) -> BluetoothDevice | None:
+    """Convert a single BLE discovery item to a BluetoothDevice, or None if invalid/duplicate."""
+    mac_address = getattr(ble_device, "address", "")
+    if not mac_address:
+        return None
+    try:
+        normalized_mac = normalize_mac(mac_address)
+    except ValueError:
+        return None
+    if normalized_mac in seen_macs:
+        return None
+    seen_macs.add(normalized_mac)
+    device_name = getattr(ble_device, "name", None) or getattr(advertisement, "local_name", None)
+    return BluetoothDevice(
+        mac_address=normalized_mac,
+        device_name=device_name,
+        is_connected=False,
+        is_paired=False,
+        device_class="BLE",
+    )
+
+
+def _extract_ble_dict_items(discovered_devices: dict) -> list[tuple[object, object | None]]:
+    """Extract (device, advertisement) pairs from a dict discovery result."""
+    parsed_items: list[tuple[object, object | None]] = []
+    for value in discovered_devices.values():
+        if isinstance(value, tuple) and value:
+            ble_device = value[0]
+            advertisement = value[1] if len(value) > 1 else None
+            parsed_items.append((ble_device, advertisement))
+        else:
+            parsed_items.append((value, None))
+    return parsed_items
+
+
+def _parse_ble_discovery_results(discovered_devices: object) -> list[BluetoothDevice]:
+    """Convert bleak discovery output into BluetoothDevice objects."""
+    if isinstance(discovered_devices, dict):
+        parsed_items = _extract_ble_dict_items(discovered_devices)
+    elif isinstance(discovered_devices, list):
+        parsed_items = [(device, None) for device in discovered_devices]
+    else:
+        return []
+
+    seen_macs: set[str] = set()
+    devices: list[BluetoothDevice] = []
+    for ble_device, advertisement in parsed_items:
+        device = _process_ble_item(ble_device, advertisement, seen_macs)
+        if device is not None:
+            devices.append(device)
+    return devices
 
 
 def _parse_bt_output(output: str) -> list[BluetoothDevice]:
@@ -236,3 +392,19 @@ def _is_bluetooth_adapter(name: str) -> bool:
         r"(?i)microsoft.*bluetooth.*enumerator",
     ]
     return any(re.search(pattern, name) for pattern in adapter_patterns)
+
+
+def _is_wsl() -> bool:
+    """Return True when running under Windows Subsystem for Linux."""
+    if platform.system().lower() != "linux":
+        return False
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        return True
+    for version_path in ("/proc/sys/kernel/osrelease", "/proc/version"):
+        try:
+            with open(version_path, encoding="utf-8") as version_file:
+                if "microsoft" in version_file.read().lower():
+                    return True
+        except OSError:
+            continue
+    return False

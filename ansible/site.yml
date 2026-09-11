@@ -1,0 +1,24 @@
+---
+# Net Sentry — top-level Ansible playbook
+#
+# Usage:
+#   ansible-playbook ansible/site.yml -i inventory.yml
+#
+# Inventory example (inventory.yml):
+#   all:
+#     hosts:
+#       my-pi:
+#         ansible_host: 192.168.1.50
+#         ansible_user: pi
+#         net_sentry_config_source: files/config.yaml
+
+- name: Deploy Net Sentry device visibility tracker
+  hosts: all
+  gather_facts: true
+
+  vars:
+    # Override defaults here or use host_vars / group_vars.
+    net_sentry_version: main
+
+  roles:
+    - role: net-sentry

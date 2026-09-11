@@ -1,7 +1,7 @@
 """Alembic environment configuration.
 
 Reads the SQLAlchemy URL from alembic.ini or the DATABASE_URL env var,
-and uses the BtWiFi models as the migration target metadata.
+and uses the Net Sentry models as the migration target metadata.
 """
 
 import os
@@ -38,7 +38,7 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode (connected to database)."""
-    connectable = create_engine(_db_url or "sqlite:///btwifi.db", poolclass=pool.NullPool)
+    connectable = create_engine(_db_url or "sqlite:///net-sentry.db", poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)

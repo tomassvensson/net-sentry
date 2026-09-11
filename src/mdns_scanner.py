@@ -1,17 +1,36 @@
-"""mDNS / Bonjour / Avahi device discovery using zeroconf.
+"""mDNS / Bonjour / Avahi device discovery using pure Python sockets.
 
 Discovers devices advertising services via mDNS (multicast DNS),
 commonly used by printers, IoT devices, Apple devices, etc.
+
+Uses only Python standard library — no external dependencies.
 """
 
 import logging
+import select
+import socket
+import struct
+import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 
 from src.oui_lookup import is_randomized_mac, lookup_vendor
 
 logger = logging.getLogger(__name__)
+
+# mDNS multicast address and port (RFC 6762)
+_MDNS_ADDR = "224.0.0.251"  # NOSONAR - standard mDNS multicast address (RFC 6762)
+_MDNS_PORT = 5353
+
+# DNS record types
+_DNS_TYPE_A = 1
+_DNS_TYPE_PTR = 12
+_DNS_TYPE_TXT = 16
+_DNS_TYPE_AAAA = 28
+_DNS_TYPE_SRV = 33
+
+# DNS-SD service enumeration query — returns PTR records naming all service types
+_DNS_SD_SERVICES = "_services._dns-sd._udp.local."
 
 # Common mDNS service types to browse
 _SERVICE_TYPES: list[str] = [
@@ -54,197 +73,439 @@ class MdnsDevice:
     vendor: str | None = None
     is_randomized: bool = False
     txt_records: dict[str, str] = field(default_factory=dict)
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
-def scan_mdns_services(timeout: float = _BROWSE_TIMEOUT) -> list[MdnsDevice]:
+def _discover_dynamic_service_types(sock: socket.socket, timeout: float) -> list[str]:
+    """Query DNS-SD to discover service types not in the built-in list."""
+    dynamic: list[str] = []
+    enum_responses = _query_service_type(sock, _DNS_SD_SERVICES, timeout)
+    for raw in enum_responses:
+        for r in _parse_dns_records(raw):
+            if r["type"] == _DNS_TYPE_PTR and "target" in r:
+                svc = r["target"]
+                if svc not in _SERVICE_TYPES and svc not in dynamic:
+                    dynamic.append(svc)
+                    logger.debug("DNS-SD discovered service type: %s", svc)
+    return dynamic
+
+
+def _query_all_service_types(
+    sock: socket.socket,
+    all_service_types: list[str],
+    timeout: float,
+) -> tuple[list[dict], list[str]]:
+    """Query every service type and collect all DNS records and PTR targets."""
+    all_records: list[dict] = []
+    ptr_targets: list[str] = []
+    last_progress_log = time.monotonic()
+    for index, stype in enumerate(all_service_types, start=1):
+        now = time.monotonic()
+        if index == 1 or index == len(all_service_types) or now - last_progress_log >= 30:
+            logger.info("mDNS progress: querying service type %d/%d (%s).", index, len(all_service_types), stype)
+            last_progress_log = now
+        for raw in _query_service_type(sock, stype, timeout):
+            records = _parse_dns_records(raw)
+            all_records.extend(records)
+            for r in records:
+                if r["type"] == _DNS_TYPE_PTR and "target" in r:
+                    ptr_targets.append(r["target"])
+    return all_records, ptr_targets
+
+
+def scan_mdns_services(timeout: float = _BROWSE_TIMEOUT, allowed_types: list[str] | None = None) -> list[MdnsDevice]:
     """Discover devices advertising mDNS services on the local network.
 
-    Uses zeroconf to browse for common service types and collect
-    device information.
+    Sends DNS PTR queries for common service types via multicast UDP
+    and parses the responses — no external dependencies required.
 
     Args:
-        timeout: How long to browse for each service type (seconds).
+        timeout: How long to wait for responses per service type (seconds).
+        allowed_types: If non-empty, only these service types are scanned.
+            When empty or None, all built-in types plus DNS-SD-discovered
+            types are scanned.
 
     Returns:
         List of discovered MdnsDevice objects.
     """
-    try:
-        from zeroconf import Zeroconf
-    except ImportError:
-        logger.warning("zeroconf not installed. Install with: pip install zeroconf")
+    logger.info("Starting mDNS service discovery (timeout=%.1fs per type)...", timeout)
+
+    sock = _create_mdns_socket()
+    if sock is None:
+        logger.warning("Cannot start mDNS scanner: failed to create socket")
         return []
 
-    logger.info("Starting mDNS service discovery (timeout=%.1fs per type)...", timeout)
-    seen_keys: set[str] = set()
-
-    zc = Zeroconf()
     try:
-        collector = _ServiceCollector()
-        browsers = _start_browsers(zc, collector)
-
-        import time
-
-        time.sleep(timeout)
-
-        devices = _process_collected_services(zc, collector, seen_keys, timeout)
-
-        for browser in browsers:
-            browser.cancel()
+        dynamic_service_types = _discover_dynamic_service_types(sock, timeout)
+        if dynamic_service_types:
+            logger.info("DNS-SD enumeration found %d additional service types", len(dynamic_service_types))
+        all_service_types = allowed_types or list(_SERVICE_TYPES) + dynamic_service_types
+        logger.info("mDNS querying %d service type(s).", len(all_service_types))
+        all_records, ptr_targets = _query_all_service_types(sock, all_service_types, timeout)
     finally:
-        zc.close()
+        sock.close()
 
+    devices = _build_devices_from_records(all_records, ptr_targets, set())
     logger.info("mDNS discovery complete: found %d services.", len(devices))
     return devices
 
 
-def _start_browsers(zc: Any, collector: "_ServiceCollector") -> list[Any]:
-    """Start ServiceBrowser instances for all known service types.
+# ---------------------------------------------------------------------------
+# DNS wire-format helpers
+# ---------------------------------------------------------------------------
+
+
+def _encode_dns_name(name: str) -> bytes:
+    """Encode a DNS name in wire format (labels, no compression).
 
     Args:
-        zc: Zeroconf instance.
-        collector: Service collector listener.
+        name: Fully-qualified DNS name (e.g., "_http._tcp.local.").
 
     Returns:
-        List of active ServiceBrowser instances.
+        Wire-format encoded bytes.
     """
-    from zeroconf import ServiceBrowser
+    result = b""
+    for label in name.rstrip(".").split("."):
+        encoded = label.encode("ascii")
+        result += bytes([len(encoded)]) + encoded
+    return result + b"\x00"
 
-    browsers: list[Any] = []
-    for stype in _SERVICE_TYPES:
+
+def _build_ptr_query(service_type: str) -> bytes:
+    """Build a DNS PTR query for an mDNS service type.
+
+    Args:
+        service_type: e.g. "_http._tcp.local."
+
+    Returns:
+        Raw DNS query packet bytes.
+    """
+    header = struct.pack(">HHHHHH", 0, 0, 1, 0, 0, 0)
+    qname = _encode_dns_name(service_type)
+    question = qname + struct.pack(">HH", _DNS_TYPE_PTR, 1)  # type=PTR, class=IN
+    return header + question
+
+
+def _find_dns_name_end(data: bytes, start: int) -> int:
+    """Return the byte offset immediately after the encoded DNS name at *start*.
+
+    Scans forward without following pointer compression — used only to
+    determine the ``end_offset`` returned by :func:`_decode_dns_name`.
+    """
+    offset = start
+    while offset < len(data):
+        length = data[offset]
+        if length == 0:
+            return offset + 1
+        if (length & 0xC0) == 0xC0:
+            return offset + 2
+        offset += length + 1
+    return offset
+
+
+def _follow_dns_pointer(data: bytes, offset: int, visited: set[int]) -> int | None:
+    """Follow a DNS compression pointer at *offset*.
+
+    Returns the target offset, or ``None`` if the pointer is invalid or cyclic.
+    """
+    if offset + 1 >= len(data):
+        return None
+    pointer = ((data[offset] & 0x3F) << 8) | data[offset + 1]
+    if pointer in visited or pointer >= len(data):
+        return None
+    visited.add(pointer)
+    return pointer
+
+
+def _decode_dns_name(data: bytes, offset: int) -> tuple[str, int]:
+    """Decode a DNS name from wire format, handling pointer compression.
+
+    Args:
+        data: Full DNS message bytes.
+        offset: Starting offset of the name.
+
+    Returns:
+        Tuple of (decoded name string, offset after the name).
+    """
+    end_offset = _find_dns_name_end(data, offset)
+    labels: list[str] = []
+    visited: set[int] = set()
+
+    while offset < len(data):
+        length = data[offset]
+        if length == 0:
+            break
+        if (length & 0xC0) == 0xC0:
+            pointer = _follow_dns_pointer(data, offset, visited)
+            if pointer is None:
+                break
+            offset = pointer
+            continue
+        offset += 1
+        if offset + length > len(data):
+            break
+        labels.append(data[offset : offset + length].decode("ascii", errors="replace"))
+        offset += length
+
+    name = ".".join(labels) + "." if labels else "."
+    return name, end_offset
+
+
+def _parse_rdata(rtype: int, rdlength: int, data: bytes, rdata_start: int) -> dict:
+    """Parse type-specific RDATA for a single DNS resource record."""
+    if rtype == _DNS_TYPE_PTR:
+        target, _ = _decode_dns_name(data, rdata_start)
+        return {"target": target}
+    if rtype == _DNS_TYPE_A and rdlength == 4:
+        return {"address": socket.inet_ntoa(data[rdata_start : rdata_start + 4])}
+    if rtype == _DNS_TYPE_AAAA and rdlength == 16:
+        return {"address": socket.inet_ntop(socket.AF_INET6, data[rdata_start : rdata_start + 16])}
+    if rtype == _DNS_TYPE_SRV and rdlength >= 6:
+        priority, weight, port = struct.unpack_from(">HHH", data, rdata_start)
+        target, _ = _decode_dns_name(data, rdata_start + 6)
+        return {"priority": priority, "weight": weight, "port": port, "target": target}
+    if rtype == _DNS_TYPE_TXT:
+        return {"txt": _parse_txt_rdata(data[rdata_start : rdata_start + rdlength])}
+    return {}
+
+
+def _skip_dns_questions(data: bytes, offset: int, count: int) -> int | None:
+    """Skip *count* DNS question records starting at *offset*.
+
+    Returns the new offset, or ``None`` if parsing fails.
+    """
+    for _ in range(count):
         try:
-            browser = ServiceBrowser(zc, stype, collector)  # type: ignore[arg-type]
-            browsers.append(browser)
+            _, offset = _decode_dns_name(data, offset)
+            offset += 4  # QTYPE + QCLASS
         except Exception:
-            logger.debug("Failed to browse service type: %s", stype)
-    return browsers
+            return None
+    return offset
 
 
-def _process_collected_services(
-    zc: Any,
-    collector: "_ServiceCollector",
-    seen_keys: set[str],
-    timeout: float,
-) -> list[MdnsDevice]:
-    """Process services collected by the listener into MdnsDevice objects.
+def _parse_dns_records(data: bytes) -> list[dict]:
+    """Parse DNS resource records from a raw DNS message.
 
     Args:
-        zc: Zeroconf instance.
-        collector: Service collector with found services.
-        seen_keys: Set for deduplication by IP+service.
-        timeout: Timeout for service info resolution.
+        data: Raw DNS message bytes.
 
     Returns:
-        List of discovered MdnsDevice objects.
+        List of record dicts with type-specific fields.
     """
-    devices: list[MdnsDevice] = []
+    if len(data) < 12:
+        return []
 
-    for stype, name in collector.found:
-        device = _resolve_service(zc, stype, name, seen_keys, timeout)
-        if device:
+    try:
+        _txn_id, _flags, qdcount, ancount, nscount, arcount = struct.unpack_from(">HHHHHH", data, 0)
+    except struct.error:
+        return []
+
+    offset = _skip_dns_questions(data, 12, qdcount)
+    if offset is None:
+        return []
+
+    records: list[dict] = []
+    for _ in range(ancount + nscount + arcount):
+        if offset >= len(data):
+            break
+        try:
+            name, offset = _decode_dns_name(data, offset)
+            if offset + 10 > len(data):
+                break
+            rtype, _rclass, _ttl, rdlength = struct.unpack_from(">HHIH", data, offset)
+            offset += 10
+            rdata_start = offset
+            extra = _parse_rdata(rtype, rdlength, data, rdata_start)
+            records.append({"name": name, "type": rtype, **extra})
+            offset = rdata_start + rdlength
+        except Exception:
+            break
+
+    return records
+
+
+def _parse_txt_rdata(rdata: bytes) -> dict[str, str]:
+    """Parse TXT RDATA (RFC 1035: length-prefixed strings).
+
+    Args:
+        rdata: Raw TXT RDATA bytes.
+
+    Returns:
+        Key-value dict of TXT records.
+    """
+    txt: dict[str, str] = {}
+    i = 0
+    while i < len(rdata):
+        str_len = rdata[i]
+        i += 1
+        if i + str_len > len(rdata):
+            break
+        item = rdata[i : i + str_len].decode("utf-8", errors="replace")
+        i += str_len
+        if "=" in item:
+            k, _, v = item.partition("=")
+            txt[k] = v
+        else:
+            txt[item] = ""
+    return txt
+
+
+# ---------------------------------------------------------------------------
+# mDNS socket + query
+# ---------------------------------------------------------------------------
+
+
+def _create_mdns_socket() -> socket.socket | None:
+    """Create a non-blocking UDP socket for mDNS multicast queries.
+
+    Returns:
+        Configured socket, or None on failure.
+    """
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+        sock.setblocking(False)
+        return sock
+    except OSError:
+        logger.debug("Failed to create mDNS socket")
+        return None
+
+
+def _query_service_type(
+    sock: socket.socket,
+    service_type: str,
+    timeout: float,
+) -> list[bytes]:
+    """Send a PTR query and collect all responses within the timeout.
+
+    Args:
+        sock: UDP socket (non-blocking).
+        service_type: mDNS service type to query.
+        timeout: How long to wait for responses (seconds).
+
+    Returns:
+        List of raw response packets.
+    """
+    query = _build_ptr_query(service_type)
+    responses: list[bytes] = []
+
+    try:
+        sock.sendto(query, (_MDNS_ADDR, _MDNS_PORT))
+    except OSError:
+        logger.debug("Failed to send mDNS query for %s", service_type)
+        return responses
+
+    readable, _, _ = select.select([sock], [], [], timeout)
+    while readable:
+        try:
+            raw, _ = sock.recvfrom(4096)
+            responses.append(raw)
+        except OSError:
+            break
+        readable, _, _ = select.select([sock], [], [], 0)
+
+    return responses
+
+
+# ---------------------------------------------------------------------------
+# Record aggregation
+# ---------------------------------------------------------------------------
+
+
+def _build_devices_from_records(
+    all_records: list[dict],
+    ptr_targets: list[str],
+    seen_keys: set[str],
+) -> list[MdnsDevice]:
+    """Build MdnsDevice objects from parsed DNS records.
+
+    Args:
+        all_records: All parsed DNS records from responses.
+        ptr_targets: Service instance names found in PTR records.
+        seen_keys: Deduplication set (modified in place).
+
+    Returns:
+        List of resolved MdnsDevice objects.
+    """
+    srv_by_name: dict[str, dict] = {}
+    txt_by_name: dict[str, dict] = {}
+    a_by_host: dict[str, str] = {}
+
+    for r in all_records:
+        name = r.get("name", "")
+        if r["type"] == _DNS_TYPE_SRV:
+            srv_by_name[name] = r
+        elif r["type"] == _DNS_TYPE_TXT:
+            txt_by_name[name] = r
+        elif r["type"] == _DNS_TYPE_A and "address" in r:
+            a_by_host[name] = r["address"]
+
+    devices: list[MdnsDevice] = []
+    for instance_name in ptr_targets:
+        device = _resolve_instance(instance_name, srv_by_name, txt_by_name, a_by_host, seen_keys)
+        if device is not None:
             devices.append(device)
 
     return devices
 
 
-def _resolve_service(
-    zc: Any,
-    stype: str,
-    name: str,
+def _resolve_instance(
+    instance_name: str,
+    srv_by_name: dict[str, dict],
+    txt_by_name: dict[str, dict],
+    a_by_host: dict[str, str],
     seen_keys: set[str],
-    timeout: float,
 ) -> MdnsDevice | None:
-    """Resolve a single mDNS service into an MdnsDevice.
+    """Resolve a single service instance into an MdnsDevice.
 
     Args:
-        zc: Zeroconf instance.
-        stype: Service type string.
-        name: Service name.
-        seen_keys: Set for deduplication.
-        timeout: Resolution timeout.
+        instance_name: The service instance name from a PTR record.
+        srv_by_name: SRV records indexed by service instance name.
+        txt_by_name: TXT records indexed by service instance name.
+        a_by_host: A records indexed by hostname.
+        seen_keys: Deduplication set (modified in place).
 
     Returns:
-        MdnsDevice if resolved, None otherwise.
+        MdnsDevice if resolved, None if insufficient data.
     """
-    try:
-        info = zc.get_service_info(stype, name, timeout=int(timeout * 1000))
-        if info is None:
-            return None
-
-        addresses = info.parsed_addresses()
-        if not addresses:
-            return None
-
-        ip = addresses[0]
-        key = f"{ip}:{stype}"
-        if key in seen_keys:
-            return None
-        seen_keys.add(key)
-
-        mac = _arp_lookup_mac(ip)
-        txt = _parse_txt_records(info.properties)
-        vendor = lookup_vendor(mac) if mac else None
-        is_rand = is_randomized_mac(mac) if mac else False
-
-        return MdnsDevice(
-            hostname=(info.server or "").rstrip("."),
-            ip_address=ip,
-            mac_address=mac,
-            service_type=stype.replace("._tcp.local.", "").lstrip("_"),
-            service_name=name,
-            port=info.port or 0,
-            vendor=vendor,
-            is_randomized=is_rand,
-            txt_records=txt,
-        )
-    except Exception:
-        logger.debug("Failed to resolve mDNS service: %s", name)
+    srv = srv_by_name.get(instance_name)
+    if srv is None:
         return None
 
+    hostname = srv.get("target", "")
+    ip = a_by_host.get(hostname, "")
+    if not ip:
+        return None
 
-def _parse_txt_records(properties: dict[bytes, bytes | None] | None) -> dict[str, str]:
-    """Parse mDNS TXT record properties into a string dictionary.
+    key = f"{ip}:{instance_name}"
+    if key in seen_keys:
+        return None
+    seen_keys.add(key)
 
-    Args:
-        properties: Raw TXT record properties from zeroconf.
+    txt_record = txt_by_name.get(instance_name, {})
+    txt_data: dict[str, str] = txt_record.get("txt", {})
 
-    Returns:
-        Parsed key-value dictionary.
-    """
-    txt: dict[str, str] = {}
-    if not properties:
-        return txt
+    mac = _arp_lookup_mac(ip)
+    vendor = lookup_vendor(mac) if mac else None
+    is_rand = is_randomized_mac(mac) if mac else False
 
-    for key_bytes, val_bytes in properties.items():
-        try:
-            k = key_bytes.decode("utf-8", errors="replace") if isinstance(key_bytes, bytes) else str(key_bytes)
-            v = val_bytes.decode("utf-8", errors="replace") if isinstance(val_bytes, bytes) else str(val_bytes or "")
-            txt[k] = v
-        except Exception:
-            pass
+    parts = instance_name.split(".")
+    stype = ".".join(parts[1:]) if len(parts) > 1 else ""
+    stype_clean = stype.replace("._tcp.local.", "").replace("._udp.local.", "").lstrip("_")
 
-    return txt
-
-
-class _ServiceCollector:
-    """Collects mDNS service discoveries.
-
-    Implements the zeroconf ServiceListener interface.
-    """
-
-    def __init__(self) -> None:
-        self.found: list[tuple[str, str]] = []
-
-    def add_service(self, zc: object, type_: str, name: str) -> None:  # noqa: ARG002  # NOSONAR python:S1172 - required by ServiceListener interface
-        """Handle a newly discovered service."""
-        self.found.append((type_, name))
-
-    def remove_service(self, zc: object, type_: str, name: str) -> None:  # noqa: ARG002  # NOSONAR python:S1172 - required by ServiceListener interface
-        """Handle a removed service (ignored)."""
-
-    def update_service(self, zc: object, type_: str, name: str) -> None:  # noqa: ARG002  # NOSONAR python:S1172 - required by ServiceListener interface
-        """Handle a service update (treated as add)."""
-        self.found.append((type_, name))
+    return MdnsDevice(
+        hostname=hostname.rstrip("."),
+        ip_address=ip,
+        mac_address=mac,
+        service_type=stype_clean,
+        service_name=instance_name,
+        port=srv.get("port", 0),
+        vendor=vendor,
+        is_randomized=is_rand,
+        txt_records=txt_data,
+    )
 
 
 def _arp_lookup_mac(ip_address: str) -> str:
@@ -268,7 +529,6 @@ def _arp_lookup_mac(ip_address: str) -> str:
             check=False,
         )
         if result.returncode == 0:
-            # Match MAC in arp output
             match = re.search(
                 r"([0-9a-fA-F]{2}(?:[:-][0-9a-fA-F]{2}){5})",
                 result.stdout,

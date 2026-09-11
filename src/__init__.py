@@ -1,1 +1,1 @@
-"""BtWiFi - Device Visibility Tracker."""
+"""Net Sentry - Device Visibility Tracker."""

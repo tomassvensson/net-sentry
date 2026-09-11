@@ -1,6 +1,6 @@
 """Tests for device tracker (visibility window management)."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -47,6 +47,7 @@ def _make_wifi_network(**kwargs) -> WifiNetwork:
 class TestUpsertWifiDevice:
     """Tests for WiFi device upsert."""
 
+    @pytest.mark.timeout(30)
     def test_insert_new_device(self, in_memory_engine) -> None:
         network = _make_wifi_network()
         with get_session(in_memory_engine) as session:
@@ -56,6 +57,7 @@ class TestUpsertWifiDevice:
             assert device.device_type == "wifi_ap"
             assert device.ssid == "TestNet"
 
+    @pytest.mark.timeout(30)
     def test_update_existing_device(self, in_memory_engine) -> None:
         network1 = _make_wifi_network(ssid="OldName")
         network2 = _make_wifi_network(ssid="NewName")
@@ -73,6 +75,7 @@ class TestUpsertWifiDevice:
 class TestUpsertBluetoothDevice:
     """Tests for Bluetooth device upsert."""
 
+    @pytest.mark.timeout(30)
     def test_insert_new_device(self, in_memory_engine) -> None:
         bt = BluetoothDevice(mac_address="11:22:33:44:55:66", device_name="Phone")
         with get_session(in_memory_engine) as session:
@@ -82,6 +85,7 @@ class TestUpsertBluetoothDevice:
             assert device.device_type == "bluetooth"
             assert device.device_name == "Phone"
 
+    @pytest.mark.timeout(30)
     def test_skip_no_mac(self, in_memory_engine) -> None:
         bt = BluetoothDevice(mac_address="", device_name="Unknown")
         with get_session(in_memory_engine) as session:
@@ -92,24 +96,29 @@ class TestUpsertBluetoothDevice:
 class TestUpdateVisibility:
     """Tests for visibility window management."""
 
+    @pytest.mark.timeout(30)
     def test_create_new_window(self, in_memory_engine) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(in_memory_engine) as session:
-            window = update_visibility(session, "AA:BB:CC:DD:EE:FF", now, -65.0)
+            window, is_new, prev = update_visibility(session, "AA:BB:CC:DD:EE:FF", now, -65.0)
             session.flush()
+            assert is_new is True
+            assert prev is None
             assert window.first_seen == now
             assert window.last_seen == now
             assert window.signal_strength_dbm == -65.0
             assert window.scan_count == 1
 
+    @pytest.mark.timeout(30)
     def test_extend_existing_window(self, in_memory_engine) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         later = now + timedelta(seconds=60)
         with get_session(in_memory_engine) as session:
             update_visibility(session, "AA:BB:CC:DD:EE:FF", now, -65.0)
             session.flush()
-            window = update_visibility(session, "AA:BB:CC:DD:EE:FF", later, -70.0)
+            window, is_new, _ = update_visibility(session, "AA:BB:CC:DD:EE:FF", later, -70.0)
             session.flush()
+            assert is_new is False
             # SQLite strips timezone info, so compare without tz
             assert window.first_seen.replace(tzinfo=None) == now.replace(tzinfo=None)
             assert window.last_seen.replace(tzinfo=None) == later.replace(tzinfo=None)
@@ -118,8 +127,9 @@ class TestUpdateVisibility:
             assert window.min_signal_dbm == -70.0  # -70 < -65
             assert window.max_signal_dbm == -65.0
 
+    @pytest.mark.timeout(30)
     def test_new_window_after_gap(self, in_memory_engine) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         much_later = now + timedelta(seconds=600)  # 10 minutes > 5 minute gap
         with get_session(in_memory_engine) as session:
             update_visibility(session, "AA:BB:CC:DD:EE:FF", now, -65.0, gap_seconds=300)
@@ -130,8 +140,9 @@ class TestUpdateVisibility:
             windows = session.query(VisibilityWindow).filter_by(mac_address="AA:BB:CC:DD:EE:FF").all()
             assert len(windows) == 2
 
+    @pytest.mark.timeout(30)
     def test_signal_min_max_tracking(self, in_memory_engine) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(in_memory_engine) as session:
             update_visibility(session, "AA:BB:CC:DD:EE:FF", now, -60.0)
             update_visibility(session, "AA:BB:CC:DD:EE:FF", now + timedelta(seconds=10), -80.0)
@@ -146,6 +157,7 @@ class TestUpdateVisibility:
 class TestTrackWifiScan:
     """Tests for WiFi scan tracking."""
 
+    @pytest.mark.timeout(30)
     def test_track_multiple_networks(self, in_memory_engine) -> None:
         networks = [
             _make_wifi_network(bssid="AA:BB:CC:DD:EE:01", ssid="Net1"),
@@ -163,6 +175,7 @@ class TestTrackWifiScan:
 class TestTrackBluetoothScan:
     """Tests for Bluetooth scan tracking."""
 
+    @pytest.mark.timeout(30)
     def test_track_bluetooth_devices(self, in_memory_engine) -> None:
         bt_devices = [
             BluetoothDevice(mac_address="11:22:33:44:55:01", device_name="Phone"),
@@ -176,8 +189,9 @@ class TestTrackBluetoothScan:
 class TestGetAllDevicesWithLatestWindow:
     """Tests for retrieving all devices with visibility data."""
 
+    @pytest.mark.timeout(30)
     def test_returns_devices_with_windows(self, in_memory_engine) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(in_memory_engine) as session:
             device = Device(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap", ssid="Test")
             session.add(device)
@@ -193,6 +207,7 @@ class TestGetAllDevicesWithLatestWindow:
             assert w is not None
             assert w.signal_strength_dbm == -65.0
 
+    @pytest.mark.timeout(30)
     def test_returns_devices_without_windows(self, in_memory_engine) -> None:
         with get_session(in_memory_engine) as session:
             device = Device(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap")

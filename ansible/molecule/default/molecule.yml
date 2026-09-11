@@ -1,0 +1,50 @@
+---
+# Molecule configuration for the net-sentry Ansible role.
+# Uses the Docker driver to spin up an ephemeral Debian container for
+# convergence and verification, keeping CI lightweight and reproducible.
+#
+# Requirements:
+#   pip install molecule molecule-plugins[docker] docker
+#
+# Usage:
+#   cd ansible
+#   molecule test
+
+dependency:
+  name: galaxy
+
+driver:
+  name: docker
+
+platforms:
+  - name: net-sentry-test
+    image: "debian:bookworm-slim"
+    pre_build_image: true
+    command: /sbin/init
+    privileged: false
+    # Needed for systemd-based verification
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    capabilities:
+      - SYS_ADMIN
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      net-sentry-test:
+        # Override defaults for testing — skip actual git clone by pointing at
+        # the local checkout mounted as a pre-installed directory.
+        net_sentry_repo: "https://github.com/tomassvensson/btwf.git"
+        net_sentry_version: "main"
+        net_sentry_skip_service_start: true
+  env:
+    ANSIBLE_NOCOWS: "1"
+    ANSIBLE_STDOUT_CALLBACK: debug
+
+verifier:
+  name: ansible

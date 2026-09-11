@@ -1,0 +1,35 @@
+[Unit]
+Description=Net Sentry — WiFi/BT device visibility tracker
+Documentation=https://github.com/tomassvensson/btwf
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ net_sentry_user }}
+Group={{ net_sentry_group }}
+WorkingDirectory={{ net_sentry_home }}
+ExecStart={{ net_sentry_venv }}/bin/python -m src.main --continuous
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=net-sentry
+
+# Environment
+Environment="DATABASE_URL={{ net_sentry_db_url }}"
+{% if net_sentry_json_logging %}
+Environment="NET_SENTRY_JSON_LOGGING=1"
+{% endif %}
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths={{ net_sentry_home }}
+PrivateTmp=true
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target

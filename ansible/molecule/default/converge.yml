@@ -1,0 +1,32 @@
+---
+# Molecule converge playbook — installs the net-sentry role onto the test
+# container.  The role is applied with systemd service start suppressed so the
+# play succeeds even though the lightweight Docker container lacks a full init.
+
+- name: Converge
+  hosts: all
+  become: true
+
+  pre_tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install minimal requirements for the role
+      ansible.builtin.apt:
+        name:
+          - git
+          - python3
+          - python3-venv
+          - python3-pip
+          - curl
+          - systemd
+          - procps
+        state: present
+
+  roles:
+    - role: net-sentry
+      vars:
+        # Skip starting the service in CI — no full init daemon available
+        net_sentry_skip_service_start: true

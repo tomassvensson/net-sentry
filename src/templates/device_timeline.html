@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Timeline — {{ device.device_name or device.mac_address }} — Net Sentry</title>
+    <link rel="icon" href="data:,">
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --surface: #16213e;
+            --primary: #0f3460;
+            --accent: #e94560;
+            --text: #eee;
+            --text-dim: #999;
+            --success: #4caf50;
+            --warning: #ff9800;
+            --border: #2a2a4a;
+            --window-bar: #1565c0;
+            --gap-bar: #3a1a1a;
+        }
+        [data-theme="light"] {
+            --bg: #f5f5f5;
+            --surface: #fff;
+            --primary: #1565c0;
+            --accent: #d32f2f;
+            --text: #222;
+            --text-dim: #666;
+            --success: #2e7d32;
+            --warning: #f57c00;
+            --border: #ddd;
+            --window-bar: #42a5f5;
+            --gap-bar: #fce4ec;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+        .header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 1.2rem; }
+        .breadcrumb { font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.3rem; }
+        .breadcrumb a { color: var(--accent); text-decoration: none; }
+        .container { max-width: 1100px; margin: 1.5rem auto; padding: 0 1rem; }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.2rem 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .card h2 { font-size: 1rem; margin-bottom: 1rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
+        .meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.8rem; }
+        .meta-item label, .meta-item .meta-label { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; display: block; margin-bottom: 0.2rem; }
+        .meta-item span { font-size: 0.9rem; font-family: monospace; }
+        .theme-btn { cursor: pointer; background: none; border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 0.3rem 0.7rem; font-size: 0.8rem; }
+        .gap-controls { display: flex; align-items: center; gap: 0.8rem; margin-bottom: 1rem; font-size: 0.85rem; }
+        .gap-controls input[type=number] {
+            width: 80px; padding: 0.3rem; background: var(--primary); border: 1px solid var(--border);
+            color: var(--text); border-radius: 4px;
+        }
+        .gap-controls button {
+            padding: 0.3rem 0.8rem; background: var(--accent); border: none; color: #fff;
+            border-radius: 4px; cursor: pointer; font-size: 0.85rem;
+        }
+
+        /* --- Timeline bars --- */
+        .timeline { display: flex; flex-direction: column; gap: 0; }
+        .tl-entry {
+            display: flex;
+            align-items: stretch;
+            min-height: 40px;
+        }
+        .tl-label {
+            width: 170px;
+            flex-shrink: 0;
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            padding: 0.4rem 0.6rem 0.4rem 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .tl-bar-wrap {
+            flex: 1;
+            padding: 0.3rem 0;
+            display: flex;
+            align-items: center;
+        }
+        .tl-bar {
+            height: 28px;
+            border-radius: 4px;
+            width: 100%;
+            position: relative;
+            display: flex;
+            align-items: center;
+            padding: 0 0.5rem;
+            font-size: 0.75rem;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+        .tl-window { background: var(--window-bar); color: #fff; }
+        .tl-gap {
+            background: var(--gap-bar);
+            color: var(--text-dim);
+            border: 1px dashed var(--border);
+            font-style: italic;
+        }
+        .tl-signal {
+            margin-left: auto;
+            font-size: 0.7rem;
+            opacity: 0.85;
+        }
+        .signal-good { color: #81c784; }
+        .signal-fair { color: #ffb74d; }
+        .signal-weak { color: #ef9a9a; }
+
+        /* Proportional width based on duration */
+        /* JS sets inline width as percentage of total span */
+
+        .summary-bar-wrap {
+            width: 100%;
+            height: 12px;
+            background: var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+            display: flex;
+            margin-bottom: 1rem;
+        }
+        .summary-bar-seg { height: 100%; }
+        .summary-bar-seg.seg-on { background: var(--window-bar); }
+        .summary-bar-seg.seg-off { background: transparent; }
+    </style>
+</head>
+<body>
+<div class="header">
+    <div>
+        <div class="breadcrumb">
+            <a href="/">← Dashboard</a> /
+            <a href="/devices/{{ device.mac_address }}">{{ device.device_name or device.mac_address }}</a>
+        </div>
+        <h1>Timeline — {{ device.device_name or device.mac_address }}</h1>
+    </div>
+    <button class="theme-btn" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'">
+        Toggle theme
+    </button>
+</div>
+
+<div class="container">
+
+    <!-- Summary card -->
+    <div class="card">
+        <h2>Summary</h2>
+        <div class="meta-grid">
+            <div class="meta-item">
+                <span class="meta-label">MAC Address</span>
+                <span>{{ device.mac_address }}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Total Windows</span>
+                <span>{{ total_windows }}</span>
+            </div>
+            {% if first_seen %}
+            <div class="meta-item">
+                <span class="meta-label">First Seen</span>
+                <span>{{ first_seen.strftime('%Y-%m-%d %H:%M') }}</span>
+            </div>
+            {% endif %}
+            {% if last_seen %}
+            <div class="meta-item">
+                <span class="meta-label">Last Seen</span>
+                <span>{{ last_seen.strftime('%Y-%m-%d %H:%M') }}</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Gap filter -->
+    <div class="card">
+        <h2>Timeline (gaps &ge; {{ gap_minutes }} min shown)</h2>
+        <form method="get" class="gap-controls">
+            <label for="gap_minutes">Gap threshold (minutes):</label>
+            <input type="number" id="gap_minutes" name="gap_minutes" value="{{ gap_minutes }}" min="1" max="10080">
+            <button type="submit">Apply</button>
+        </form>
+
+        {% if entries %}
+        <!-- Proportional summary bar -->
+        <div class="summary-bar-wrap" id="summary-bar"></div>
+
+        <div class="timeline" id="timeline">
+            {% for entry in entries %}
+            {% if entry.type == 'window' %}
+            {% set w = entry.window %}
+            <div class="tl-entry" data-type="window"
+                 data-start="{{ w.first_seen.timestamp() }}"
+                 data-end="{{ w.last_seen.timestamp() }}">
+                <div class="tl-label">
+                    <span>{{ w.first_seen.strftime('%m-%d %H:%M') }}</span>
+                    <span>↓ {{ w.last_seen.strftime('%m-%d %H:%M') }}</span>
+                </div>
+                <div class="tl-bar-wrap">
+                    <div class="tl-bar tl-window">
+                        <span>
+                            {% set dur = (w.last_seen - w.first_seen).total_seconds() %}
+                            {% if dur >= 3600 %}
+                                {{ (dur / 3600) | round(1) }}h
+                            {% elif dur >= 60 %}
+                                {{ (dur / 60) | int }}m
+                            {% else %}
+                                {{ dur | int }}s
+                            {% endif %}
+                            &nbsp;·&nbsp; {{ w.scan_count }} scan{{ 's' if w.scan_count != 1 else '' }}
+                        </span>
+                        {% if w.signal_strength_dbm is not none %}
+                        <span class="tl-signal
+                            {% if w.signal_strength_dbm >= -60 %}signal-good
+                            {% elif w.signal_strength_dbm >= -75 %}signal-fair
+                            {% else %}signal-weak{% endif %}">
+                            {{ w.signal_strength_dbm | round(0) | int }} dBm
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <!-- Gap -->
+            <div class="tl-entry" data-type="gap"
+                 data-start="{{ entry.gap_start.timestamp() }}"
+                 data-end="{{ entry.gap_end.timestamp() }}">
+                <div class="tl-label" style="color: var(--text-dim); font-style: italic;">
+                    <span>{{ entry.gap_start.strftime('%m-%d %H:%M') }}</span>
+                    <span>↓ {{ entry.gap_end.strftime('%m-%d %H:%M') }}</span>
+                </div>
+                <div class="tl-bar-wrap">
+                    <div class="tl-bar tl-gap">
+                        absent&nbsp;&mdash;&nbsp;
+                        {% set gs = entry.gap_seconds %}
+                        {% if gs >= 86400 %}
+                            {{ (gs / 86400) | round(1) }} day{{ 's' if (gs / 86400) | round(1) != 1.0 else '' }}
+                        {% elif gs >= 3600 %}
+                            {{ (gs / 3600) | round(1) }}h
+                        {% else %}
+                            {{ (gs / 60) | int }}m
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+        {% else %}
+        <p style="color: var(--text-dim); padding: 1rem 0;">No visibility data recorded for this device yet.</p>
+        {% endif %}
+    </div>
+
+    <!-- Link back to API -->
+    <div style="font-size: 0.8rem; color: var(--text-dim); margin-bottom: 2rem;">
+        Raw JSON: <a href="/api/v1/devices/{{ device.mac_address }}/timeline?gap_minutes={{ gap_minutes }}" style="color: var(--accent);">/api/v1/devices/{{ device.mac_address }}/timeline</a>
+    </div>
+
+    {% set signal_windows = entries | selectattr('type', 'equalto', 'window') | list %}
+    {% if signal_windows %}
+    <!-- Signal strength sparkline -->
+    <div class="card">
+        <h2>Signal Strength Over Time</h2>
+        <canvas id="signal-chart" height="80" aria-label="Signal strength chart"></canvas>
+    </div>
+    {% endif %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"
+        integrity="sha384-b0GXujLkk9eYYSmcSfoyZbfyElGAQnDyY0skCHSG6w3JgTMFnz11ggrTAr7seu9f"
+        crossorigin="anonymous"></script>
+<script>
+(function () {
+    // Make timeline bars proportional in width to their duration
+    var entries = document.querySelectorAll('.tl-entry');
+    if (!entries.length) return;
+
+    var starts = [], ends = [];
+    entries.forEach(function (el) {
+        starts.push(Number.parseFloat(el.dataset.start));
+        ends.push(Number.parseFloat(el.dataset.end));
+    });
+    var minT = Math.min.apply(null, starts);
+    var maxT = Math.max.apply(null, ends);
+    var span = maxT - minT || 1;
+
+    // Summary bar segments
+    var summaryBar = document.getElementById('summary-bar');
+    var prev = minT;
+    entries.forEach(function (el) {
+        var s = Number.parseFloat(el.dataset.start);
+        var e = Number.parseFloat(el.dataset.end);
+        // gap before this entry
+        if (s > prev) {
+            var seg = document.createElement('div');
+            seg.className = 'summary-bar-seg seg-off';
+            seg.style.width = ((s - prev) / span * 100) + '%';
+            summaryBar.appendChild(seg);
+        }
+        if (el.dataset.type === 'window') {
+            var seg2 = document.createElement('div');
+            seg2.className = 'summary-bar-seg seg-on';
+            seg2.style.width = ((e - s) / span * 100) + '%';
+            summaryBar.appendChild(seg2);
+        }
+        prev = e;
+    });
+
+    // Signal strength sparkline via Chart.js
+    var chartCanvas = document.getElementById('signal-chart');
+    if (chartCanvas && typeof Chart !== 'undefined') {
+        var signalLabels = [];
+        var signalData = [];
+        entries.forEach(function (el) {
+            if (el.dataset.type !== 'window') return;
+            var start = Number.parseFloat(el.dataset.start);
+            var dateLabel = new Date(start * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+            var dbm = el.querySelector('.tl-signal');
+            if (dbm) {
+                var val = Number.parseFloat(dbm.textContent);
+                if (!Number.isNaN(val)) {
+                    signalLabels.push(dateLabel);
+                    signalData.push(val);
+                }
+            }
+        });
+        if (signalLabels.length > 0) {
+            const signalChart = new Chart(chartCanvas, { // NOSONAR — Chart renders to canvas as side effect; ref kept intentionally
+                type: 'line',
+                data: {
+                    labels: signalLabels,
+                    datasets: [{
+                        label: 'Signal (dBm)',
+                        data: signalData,
+                        borderColor: '#e94560',
+                        backgroundColor: 'rgba(233,69,96,0.1)',
+                        tension: 0.3,
+                        fill: true,
+                        pointRadius: signalLabels.length > 50 ? 0 : 3,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { ticks: { maxTicksLimit: 8, color: '#999' }, grid: { color: '#2a2a4a' } },
+                        y: { reverse: false, ticks: { color: '#999' }, grid: { color: '#2a2a4a' } }
+                    }
+                }
+            });
+        }
+    }
+})();
+</script>
+</body>
+</html>

@@ -9,7 +9,9 @@ import platform
 import re
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
+from src.oui_lookup import is_multicast_mac, normalize_mac
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +24,7 @@ class Ipv6Neighbor:
     mac_address: str
     interface: str = ""
     state: str = ""
-    scan_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __repr__(self) -> str:
         """Return string representation."""
@@ -41,15 +43,14 @@ def scan_ipv6_neighbors() -> list[Ipv6Neighbor]:
     """
     system = platform.system().lower()
     try:
-        if system == "windows":
-            return _scan_windows()
-        return _scan_linux()
+        neighbors = _scan_windows() if system == "windows" else _scan_linux()
     except FileNotFoundError:
         logger.warning("IPv6 neighbor scan command not available on this platform")
         return []
     except subprocess.SubprocessError:
         logger.exception("IPv6 neighbor scan failed")
         return []
+    return deduplicate_privacy_addresses(neighbors)
 
 
 def _scan_windows() -> list[Ipv6Neighbor]:
@@ -85,7 +86,7 @@ def _parse_windows_output(output: str) -> list[Ipv6Neighbor]:
     """
     neighbors: list[Ipv6Neighbor] = []
     current_interface = ""
-    scan_time = datetime.now(timezone.utc)
+    scan_time = datetime.now(UTC)
 
     # Match "Interface N: <name>"
     iface_pattern = re.compile(r"^Interface\s+\d+:\s+(.+)$", re.IGNORECASE)
@@ -106,11 +107,13 @@ def _parse_windows_output(output: str) -> list[Ipv6Neighbor]:
             mac_raw = entry_match.group(2)
             state = entry_match.group(3)
 
-            # Convert Windows MAC format (aa-bb-cc-dd-ee-ff) to standard
-            mac = mac_raw.replace("-", ":").upper()
+            try:
+                mac = normalize_mac(mac_raw)
+            except ValueError:
+                continue
 
-            # Skip multicast and incomplete entries
-            if mac == "FF:FF:FF:FF:FF:FF" or state.lower() == "unreachable":
+            # Skip multicast/protocol groups and incomplete entries.
+            if is_multicast_mac(mac) or state.lower() == "unreachable":
                 continue
 
             neighbors.append(
@@ -156,7 +159,7 @@ def _parse_linux_output(output: str) -> list[Ipv6Neighbor]:
         List of Ipv6Neighbor entries.
     """
     neighbors: list[Ipv6Neighbor] = []
-    scan_time = datetime.now(timezone.utc)
+    scan_time = datetime.now(UTC)
 
     pattern = re.compile(
         r"^([\da-fA-F:]+)\s+dev\s+(\S+)\s+lladdr\s+([\da-fA-F:]+)\s+(\S+)",
@@ -167,10 +170,15 @@ def _parse_linux_output(output: str) -> list[Ipv6Neighbor]:
         if match:
             ipv6 = match.group(1)
             interface = match.group(2)
-            mac = match.group(3).upper()
+            mac_raw = match.group(3)
             state = match.group(4)
 
-            if state.lower() == "failed":
+            try:
+                mac = normalize_mac(mac_raw)
+            except ValueError:
+                continue
+
+            if is_multicast_mac(mac) or state.lower() == "failed":
                 continue
 
             neighbors.append(
@@ -185,3 +193,103 @@ def _parse_linux_output(output: str) -> list[Ipv6Neighbor]:
 
     logger.info("IPv6 neighbor scan found %d entries", len(neighbors))
     return neighbors
+
+
+def _is_privacy_address(ipv6_address: str) -> bool:
+    """Heuristically detect IPv6 privacy extension (RFC 4941) addresses.
+
+    A privacy address:
+    - Is a global unicast address (starts with 2 or 3)
+    - Has a 64-bit interface identifier that does NOT follow EUI-64 encoding
+      (EUI-64 has bit 6 of the first octet set and embeds FF:FE in octets 4-5).
+
+    Link-local (fe80::/10), ULA (fc00::/7) and loopback are excluded from
+    this heuristic.
+
+    Args:
+        ipv6_address: Full IPv6 address string (compressed or expanded).
+
+    Returns:
+        True if the address looks like a temporary privacy address.
+    """
+    import ipaddress
+
+    try:
+        addr = ipaddress.IPv6Address(ipv6_address)
+    except ValueError:
+        return False
+
+    # Only consider global unicast (2000::/3)
+    if not addr.is_global:
+        return False
+
+    # Expand to 16 bytes and inspect the interface identifier (last 8 bytes)
+    packed = addr.packed
+    iid = packed[8:]  # bytes 8-15
+
+    # EUI-64 embeds FF:FE at positions 3-4 of the interface identifier.
+    return not (iid[3] == 0xFF and iid[4] == 0xFE)
+
+
+def deduplicate_privacy_addresses(neighbors: list[Ipv6Neighbor]) -> list[Ipv6Neighbor]:
+    """Remove duplicate IPv6 neighbor entries caused by privacy extension addresses.
+
+    When a device has multiple global unicast addresses (one EUI-64 derived and
+    one or more privacy temporary addresses), all map to the same MAC.  This
+    function keeps only one entry per MAC: the EUI-64 derived address if
+    available, otherwise the first encountered address.
+
+    Link-local addresses are kept separately because they are useful for
+    diagnostics and uniquely identify the interface on the local segment.
+
+    Args:
+        neighbors: Raw list of discovered IPv6 neighbors.
+
+    Returns:
+        De-duplicated list with at most one global-unicast entry per MAC.
+    """
+    # Separate link-local from global/other addresses
+    link_locals: list[Ipv6Neighbor] = []
+    globals_by_mac: dict[str, list[Ipv6Neighbor]] = {}
+
+    for n in neighbors:
+        import ipaddress
+
+        try:
+            addr = ipaddress.IPv6Address(n.ipv6_address)
+        except ValueError:
+            link_locals.append(n)
+            continue
+
+        if addr.is_link_local:
+            link_locals.append(n)
+        else:
+            globals_by_mac.setdefault(n.mac_address, []).append(n)
+
+    deduped_globals: list[Ipv6Neighbor] = []
+    for mac, entries in globals_by_mac.items():
+        # Prefer EUI-64 derived address if any
+        eui64 = [e for e in entries if not _is_privacy_address(e.ipv6_address)]
+        if eui64:
+            deduped_globals.append(eui64[0])
+        else:
+            # All are privacy addresses — keep the first one
+            deduped_globals.append(entries[0])
+
+        privacy_count = len(entries) - 1
+        if privacy_count > 0:
+            logger.debug(
+                "Suppressed %d privacy address(es) for MAC %s",
+                privacy_count,
+                mac,
+            )
+
+    result = link_locals + deduped_globals
+    if len(result) < len(neighbors):
+        logger.info(
+            "IPv6 privacy dedup: %d → %d entries (%d suppressed)",
+            len(neighbors),
+            len(result),
+            len(neighbors) - len(result),
+        )
+    return result

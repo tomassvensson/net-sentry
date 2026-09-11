@@ -1,0 +1,21 @@
+---
+# Default variable values for the net-sentry Ansible role.
+# Override in host_vars, group_vars, or the playbook vars section.
+
+net_sentry_user: net-sentry
+net_sentry_group: net-sentry
+net_sentry_home: /opt/net-sentry
+net_sentry_venv: "{{ net_sentry_home }}/.venv"
+net_sentry_repo: https://github.com/tomassvensson/btwf.git
+net_sentry_version: main
+net_sentry_python: python3
+net_sentry_db_url: "sqlite:///{{ net_sentry_home }}/net-sentry.db"
+
+# Optional: path to a local config.yaml to deploy to the target host.
+# Leave undefined to skip config deployment and rely on the example file.
+# net_sentry_config_source: files/net-sentry-config.yaml
+
+net_sentry_json_logging: false
+net_sentry_tracing: false
+# Set to true to skip starting the systemd service (useful for CI/Molecule)
+net_sentry_skip_service_start: false

@@ -1,5 +1,7 @@
 """Tests for database models and session management."""
 
+from datetime import UTC
+
 import pytest
 from sqlalchemy import create_engine, inspect, text
 
@@ -18,6 +20,7 @@ def in_memory_engine():
 class TestDatabaseInit:
     """Tests for database initialization."""
 
+    @pytest.mark.timeout(30)
     def test_init_creates_tables(self) -> None:
         engine = init_database("sqlite:///:memory:")
         # Verify tables exist by querying them
@@ -26,6 +29,7 @@ class TestDatabaseInit:
             session.query(Device).all()
             session.query(VisibilityWindow).all()
 
+    @pytest.mark.timeout(30)
     def test_init_idempotent(self) -> None:
         """Calling init_database twice should not fail."""
         engine = init_database("sqlite:///:memory:")
@@ -36,6 +40,7 @@ class TestDatabaseInit:
 class TestDeviceModel:
     """Tests for the Device model."""
 
+    @pytest.mark.timeout(30)
     def test_create_wifi_device(self, in_memory_engine) -> None:
         with get_session(in_memory_engine) as session:
             device = Device(
@@ -53,6 +58,7 @@ class TestDeviceModel:
             assert loaded.vendor == "Test Vendor"
             assert loaded.ssid == "TestNetwork"
 
+    @pytest.mark.timeout(30)
     def test_create_bluetooth_device(self, in_memory_engine) -> None:
         with get_session(in_memory_engine) as session:
             device = Device(
@@ -68,6 +74,7 @@ class TestDeviceModel:
             assert loaded.device_type == "bluetooth"
             assert loaded.device_name == "My Phone"
 
+    @pytest.mark.timeout(30)
     def test_mac_address_unique(self, in_memory_engine) -> None:
         from sqlalchemy.exc import IntegrityError
 
@@ -81,6 +88,7 @@ class TestDeviceModel:
             session.add(d2)
             session.flush()
 
+    @pytest.mark.timeout(30)
     def test_device_repr(self, in_memory_engine) -> None:
         device = Device(mac_address="AA:BB:CC:DD:EE:FF", device_type="wifi_ap", ssid="Home")
         repr_str = repr(device)
@@ -91,10 +99,11 @@ class TestDeviceModel:
 class TestVisibilityWindowModel:
     """Tests for the VisibilityWindow model."""
 
+    @pytest.mark.timeout(30)
     def test_create_window(self, in_memory_engine) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with get_session(in_memory_engine) as session:
             window = VisibilityWindow(
                 mac_address="AA:BB:CC:DD:EE:FF",
@@ -112,10 +121,11 @@ class TestVisibilityWindowModel:
             assert loaded.signal_strength_dbm == -65.0
             assert loaded.scan_count == 1
 
+    @pytest.mark.timeout(30)
     def test_window_repr(self) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         window = VisibilityWindow(
             mac_address="AA:BB:CC:DD:EE:FF",
             first_seen=now,
@@ -129,6 +139,7 @@ class TestVisibilityWindowModel:
 class TestMigrateMissingColumns:
     """Tests for automatic schema migration of missing columns."""
 
+    @pytest.mark.timeout(30)
     def test_adds_missing_columns_to_existing_table(self) -> None:
         """Simulate an old DB schema missing hostname/ip_address/category/extra_info/is_whitelisted."""
         engine = create_engine("sqlite:///:memory:", echo=False)
@@ -193,6 +204,7 @@ class TestMigrateMissingColumns:
         assert "extra_info" in new_cols
         assert "is_whitelisted" in new_cols
 
+    @pytest.mark.timeout(30)
     def test_migration_idempotent(self) -> None:
         """Running migration twice should not fail."""
         engine = create_engine("sqlite:///:memory:", echo=False)
@@ -202,6 +214,7 @@ class TestMigrateMissingColumns:
         # Second call — still nothing to do, should not raise
         _migrate_missing_columns(engine)
 
+    @pytest.mark.timeout(30)
     def test_init_database_migrates_old_schema(self) -> None:
         """init_database should be able to query Device after migrating an old schema."""
         engine = create_engine("sqlite:///:memory:", echo=False)

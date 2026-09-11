@@ -4,6 +4,8 @@ import socket
 import subprocess
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.network_discovery import (
     _ip_to_pseudo_mac,
     _parse_ip_neigh_output,
@@ -34,6 +36,7 @@ class TestScanArpTableWindows:
     @patch("src.network_discovery.platform.system", return_value="Windows")
     @patch("src.network_discovery._resolve_hostname")
     @patch("src.network_discovery.subprocess.run")
+    @pytest.mark.timeout(30)
     def test_successful_scan(self, mock_run, mock_resolve, mock_system) -> None:
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -48,6 +51,7 @@ class TestScanArpTableWindows:
 
     @patch("src.network_discovery.platform.system", return_value="Windows")
     @patch("src.network_discovery.subprocess.run")
+    @pytest.mark.timeout(30)
     def test_command_not_found(self, mock_run, mock_system) -> None:
         mock_run.side_effect = FileNotFoundError()
         devices = scan_arp_table()
@@ -55,6 +59,7 @@ class TestScanArpTableWindows:
 
     @patch("src.network_discovery.platform.system", return_value="Windows")
     @patch("src.network_discovery.subprocess.run")
+    @pytest.mark.timeout(30)
     def test_timeout(self, mock_run, mock_system) -> None:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="arp", timeout=15)
         devices = scan_arp_table()
@@ -62,6 +67,7 @@ class TestScanArpTableWindows:
 
     @patch("src.network_discovery.platform.system", return_value="Windows")
     @patch("src.network_discovery.subprocess.run")
+    @pytest.mark.timeout(30)
     def test_command_failure(self, mock_run, mock_system) -> None:
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="Error")
         devices = scan_arp_table()
@@ -74,6 +80,7 @@ class TestScanArpTableLinux:
     @patch("src.network_discovery.platform.system", return_value="Linux")
     @patch("src.network_discovery._resolve_hostname")
     @patch("src.network_discovery.subprocess.run")
+    @pytest.mark.timeout(30)
     def test_successful_scan_linux(self, mock_run, mock_resolve, mock_system) -> None:
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -89,6 +96,7 @@ class TestScanArpTableLinux:
 
     @patch("src.network_discovery.platform.system", return_value="Linux")
     @patch("src.network_discovery.subprocess.run")
+    @pytest.mark.timeout(30)
     def test_linux_command_not_found(self, mock_run, mock_system) -> None:
         mock_run.side_effect = FileNotFoundError()
         devices = scan_arp_table()
@@ -96,6 +104,7 @@ class TestScanArpTableLinux:
 
     @patch("src.network_discovery.platform.system", return_value="Linux")
     @patch("src.network_discovery.subprocess.run")
+    @pytest.mark.timeout(30)
     def test_linux_command_failure(self, mock_run, mock_system) -> None:
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="Error")
         devices = scan_arp_table()
@@ -105,6 +114,7 @@ class TestScanArpTableLinux:
 class TestParseIpNeighOutput:
     """Tests for Linux ip neigh output parser."""
 
+    @pytest.mark.timeout(30)
     def test_parses_reachable_entries(self) -> None:
         output = "192.168.1.2 dev eth0 lladdr aa:bb:cc:dd:ee:f0 REACHABLE\n"
         devices = _parse_ip_neigh_output(output)
@@ -114,21 +124,25 @@ class TestParseIpNeighOutput:
         assert devices[0].interface == "eth0"
         assert devices[0].arp_type == "dynamic"
 
+    @pytest.mark.timeout(30)
     def test_skips_failed_state(self) -> None:
         output = "192.168.1.2 dev eth0 lladdr aa:bb:cc:dd:ee:f0 FAILED\n"
         devices = _parse_ip_neigh_output(output)
         assert devices == []
 
+    @pytest.mark.timeout(30)
     def test_skips_broadcast_mac(self) -> None:
         output = "192.168.1.255 dev eth0 lladdr ff:ff:ff:ff:ff:ff REACHABLE\n"
         devices = _parse_ip_neigh_output(output)
         assert devices == []
 
+    @pytest.mark.timeout(30)
     def test_skips_multicast_mac(self) -> None:
         output = "224.0.0.1 dev eth0 lladdr 01:00:5e:00:00:01 REACHABLE\n"
         devices = _parse_ip_neigh_output(output)
         assert devices == []
 
+    @pytest.mark.timeout(30)
     def test_deduplicates_by_mac(self) -> None:
         output = (
             "192.168.1.2 dev eth0 lladdr aa:bb:cc:dd:ee:f0 REACHABLE\n"
@@ -137,14 +151,17 @@ class TestParseIpNeighOutput:
         devices = _parse_ip_neigh_output(output)
         assert len(devices) == 1
 
+    @pytest.mark.timeout(30)
     def test_stale_is_dynamic(self) -> None:
         output = "192.168.1.2 dev eth0 lladdr aa:bb:cc:dd:ee:f0 STALE\n"
         devices = _parse_ip_neigh_output(output)
         assert devices[0].arp_type == "dynamic"
 
+    @pytest.mark.timeout(30)
     def test_empty_output(self) -> None:
         assert _parse_ip_neigh_output("") == []
 
+    @pytest.mark.timeout(30)
     def test_lines_without_lladdr_skipped(self) -> None:
         output = "192.168.1.2 dev eth0  INCOMPLETE\n"
         devices = _parse_ip_neigh_output(output)
@@ -154,16 +171,20 @@ class TestParseIpNeighOutput:
 class TestIpToPseudoMac:
     """Tests for _ip_to_pseudo_mac helper."""
 
+    @pytest.mark.timeout(30)
     def test_generates_locally_administered_mac(self) -> None:
         mac = _ip_to_pseudo_mac("192.168.1.1")
         assert mac.startswith("02:00:")
 
+    @pytest.mark.timeout(30)
     def test_deterministic(self) -> None:
         assert _ip_to_pseudo_mac("10.0.0.1") == _ip_to_pseudo_mac("10.0.0.1")
 
+    @pytest.mark.timeout(30)
     def test_different_ips_different_macs(self) -> None:
         assert _ip_to_pseudo_mac("192.168.1.1") != _ip_to_pseudo_mac("192.168.1.2")
 
+    @pytest.mark.timeout(30)
     def test_format(self) -> None:
         mac = _ip_to_pseudo_mac("192.168.1.100")
         parts = mac.split(":")
@@ -175,24 +196,37 @@ class TestPingHost:
     """Tests for _ping_host helper."""
 
     @patch("src.network_discovery.subprocess.run")
+    @pytest.mark.timeout(30)
     def test_responds(self, mock_run) -> None:
         mock_run.return_value = MagicMock(returncode=0)
         result = _ping_host("192.168.1.1")
         assert result == "192.168.1.1"
 
+    @patch("src.network_discovery.platform.system", return_value="Windows")
     @patch("src.network_discovery.subprocess.run")
+    @pytest.mark.timeout(30)
+    def test_uses_windows_ping_flags(self, mock_run, _mock_system) -> None:
+        mock_run.return_value = MagicMock(returncode=0)
+        result = _ping_host("192.168.1.1", timeout=0.5)
+        assert result == "192.168.1.1"
+        assert mock_run.call_args.args[0] == ["ping", "-n", "1", "-w", "500", "192.168.1.1"]
+
+    @patch("src.network_discovery.subprocess.run")
+    @pytest.mark.timeout(30)
     def test_no_response(self, mock_run) -> None:
         mock_run.return_value = MagicMock(returncode=1)
         result = _ping_host("192.168.1.1")
         assert result is None
 
     @patch("src.network_discovery.subprocess.run")
+    @pytest.mark.timeout(30)
     def test_timeout(self, mock_run) -> None:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="ping", timeout=1)
         result = _ping_host("192.168.1.1")
         assert result is None
 
     @patch("src.network_discovery.subprocess.run")
+    @pytest.mark.timeout(30)
     def test_os_error(self, mock_run) -> None:
         mock_run.side_effect = OSError("ping not found")
         result = _ping_host("192.168.1.1")
@@ -204,6 +238,7 @@ class TestPingSweep:
 
     @patch("src.network_discovery._resolve_hostname", return_value=None)
     @patch("src.network_discovery._ping_host")
+    @pytest.mark.timeout(30)
     def test_returns_responding_hosts(self, mock_ping, mock_resolve) -> None:
         mock_ping.side_effect = lambda ip, timeout=1.0: ip if ip == "192.168.1.1" else None
         devices = ping_sweep(["192.168.1.0/30"])
@@ -212,6 +247,7 @@ class TestPingSweep:
 
     @patch("src.network_discovery._resolve_hostname", return_value=None)
     @patch("src.network_discovery._ping_host")
+    @pytest.mark.timeout(30)
     def test_empty_subnets(self, mock_ping, mock_resolve) -> None:
         devices = ping_sweep([])
         assert devices == []
@@ -219,18 +255,21 @@ class TestPingSweep:
 
     @patch("src.network_discovery._resolve_hostname", return_value=None)
     @patch("src.network_discovery._ping_host")
+    @pytest.mark.timeout(30)
     def test_invalid_subnet_skipped(self, mock_ping, mock_resolve) -> None:
         devices = ping_sweep(["not-a-subnet"])
         assert devices == []
 
     @patch("src.network_discovery._resolve_hostname", return_value=None)
     @patch("src.network_discovery._ping_host", return_value=None)
+    @pytest.mark.timeout(30)
     def test_no_hosts_respond(self, mock_ping, mock_resolve) -> None:
         devices = ping_sweep(["192.168.1.0/30"])
         assert devices == []
 
     @patch("src.network_discovery._resolve_hostname", return_value=None)
     @patch("src.network_discovery._ping_host")
+    @pytest.mark.timeout(30)
     def test_pseudo_mac_assigned(self, mock_ping, mock_resolve) -> None:
         mock_ping.return_value = "10.0.0.1"
         devices = ping_sweep(["10.0.0.0/30"])
@@ -239,6 +278,7 @@ class TestPingSweep:
 
     @patch("src.network_discovery._resolve_hostname", return_value=None)
     @patch("src.network_discovery._ping_host")
+    @pytest.mark.timeout(30)
     def test_sorted_by_ip(self, mock_ping, mock_resolve) -> None:
         mock_ping.side_effect = lambda ip, timeout=1.0: ip
         devices = ping_sweep(["10.0.0.0/29"])
@@ -250,18 +290,21 @@ class TestResolveHostname:
     """Tests for hostname resolution."""
 
     @patch("src.network_discovery.socket.gethostbyaddr")
+    @pytest.mark.timeout(30)
     def test_successful_resolve(self, mock_resolve) -> None:
         mock_resolve.return_value = ("my-laptop.local", [], ["192.168.1.2"])
         hostname = _resolve_hostname("192.168.1.2")
         assert hostname == "my-laptop.local"
 
     @patch("src.network_discovery.socket.gethostbyaddr")
+    @pytest.mark.timeout(30)
     def test_resolve_failure(self, mock_resolve) -> None:
         mock_resolve.side_effect = socket.herror("Not found")
         hostname = _resolve_hostname("192.168.1.2")
         assert hostname is None
 
     @patch("src.network_discovery.socket.gethostbyaddr")
+    @pytest.mark.timeout(30)
     def test_resolve_returns_ip(self, mock_resolve) -> None:
         """If hostname equals IP, return None."""
         mock_resolve.return_value = ("192.168.1.2", [], ["192.168.1.2"])

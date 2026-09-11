@@ -1,0 +1,13 @@
+---
+# Handlers for the net-sentry Ansible role.
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  become: true
+
+- name: Restart net-sentry
+  ansible.builtin.systemd:
+    name: net-sentry
+    state: restarted
+  become: true

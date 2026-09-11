@@ -1,0 +1,58 @@
+name: Update OUI Database
+
+on:
+  schedule:
+    # Run every Monday at 03:00 UTC — IEEE publishes updates periodically
+    - cron: "0 3 * * 1"
+  workflow_dispatch:  # allow manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  update-oui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Download latest IEEE OUI database
+        run: python scripts/update_oui_db.py --output src/data/oui.csv
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if [ -n "$(git status --short src/data/oui.csv)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+        shell: bash
+
+      - name: Create pull request with updated OUI database
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update IEEE OUI database"
+          title: "chore: update IEEE OUI vendor database"
+          body: |
+            Weekly automated update of the IEEE OUI (MAC vendor) database.
+
+            The file `src/data/oui.csv` is downloaded from
+            https://standards-oui.ieee.org/oui/oui.csv by the
+            `scripts/update_oui_db.py` script.
+
+            This keeps vendor name lookups current without requiring manual
+            intervention.
+          branch: "chore/oui-database-update"
+          delete-branch: true
+          labels: "dependencies,automated"
