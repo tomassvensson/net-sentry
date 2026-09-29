@@ -174,6 +174,17 @@ class WhitelistEntry:
 
 
 @dataclass
+class PresenceWatchEntry:
+    """A device to watch for presence state changes."""
+
+    hostname: str
+    name: str = ""
+    stable_minutes: int = 180
+    notify_on_appear: bool = True
+    notify_on_disappear: bool = True
+
+
+@dataclass
 class OuiConfig:
     """OUI database update settings."""
 
@@ -281,6 +292,7 @@ class AppConfig:
     home_assistant: HomeAssistantConfig = field(default_factory=HomeAssistantConfig)
     json_logging: bool = False
     tracing: TracingConfig = field(default_factory=TracingConfig)
+    presence_watches: list[PresenceWatchEntry] = field(default_factory=list)
 
 
 def load_config(config_path: str | None = None) -> AppConfig:
@@ -633,6 +645,19 @@ def _apply_output_settings(raw: dict, config: AppConfig) -> None:
             hop_interval_seconds=mm.get("hop_interval_seconds", config.monitor_mode.hop_interval_seconds),
             capture_duration_seconds=mm.get("capture_duration_seconds", config.monitor_mode.capture_duration_seconds),
         )
+
+    if "presence_watches" in raw:
+        config.presence_watches = [
+            PresenceWatchEntry(
+                hostname=entry.get("hostname", ""),
+                name=entry.get("name", ""),
+                stable_minutes=entry.get("stable_minutes", 180),
+                notify_on_appear=entry.get("notify_on_appear", True),
+                notify_on_disappear=entry.get("notify_on_disappear", True),
+            )
+            for entry in raw["presence_watches"]
+            if isinstance(entry, dict) and entry.get("hostname")
+        ]
 
 
 def _env(primary: str, fallback: str) -> str | None:

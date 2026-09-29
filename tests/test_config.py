@@ -170,6 +170,50 @@ class TestParseRawConfig:
         assert config.monitor_mode.interface == "wlan1"
         assert config.monitor_mode.use_docker is False
 
+    def test_presence_watches_section(self) -> None:
+        raw = {
+            "presence_watches": [
+                {
+                    "hostname": "Mi-10T-Pro.fritz.box",
+                    "name": "Xiaomi Mi 10T Pro",
+                    "stable_minutes": 120,
+                    "notify_on_appear": True,
+                    "notify_on_disappear": False,
+                },
+            ]
+        }
+        config = _parse_raw_config(raw)
+        assert len(config.presence_watches) == 1
+        assert config.presence_watches[0].hostname == "Mi-10T-Pro.fritz.box"
+        assert config.presence_watches[0].name == "Xiaomi Mi 10T Pro"
+        assert config.presence_watches[0].stable_minutes == 120
+        assert config.presence_watches[0].notify_on_appear is True
+        assert config.presence_watches[0].notify_on_disappear is False
+
+    def test_presence_watches_defaults(self) -> None:
+        raw = {
+            "presence_watches": [
+                {"hostname": "phone.local"},
+            ]
+        }
+        config = _parse_raw_config(raw)
+        assert len(config.presence_watches) == 1
+        assert config.presence_watches[0].stable_minutes == 180
+        assert config.presence_watches[0].notify_on_appear is True
+        assert config.presence_watches[0].notify_on_disappear is True
+
+    def test_presence_watches_skips_invalid(self) -> None:
+        raw = {
+            "presence_watches": [
+                {"name": "No hostname"},
+                "not a dict",
+                {"hostname": "valid.local", "name": "Valid"},
+            ]
+        }
+        config = _parse_raw_config(raw)
+        assert len(config.presence_watches) == 1
+        assert config.presence_watches[0].hostname == "valid.local"
+
 
 class TestApplyEnvOverrides:
     """Tests for environment variable overrides."""

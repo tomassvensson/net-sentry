@@ -323,6 +323,22 @@ pre-commit run --all-files
 pre-commit autoupdate
 ```
 
+### Pushing changes
+
+GitHub only receives commits that already passed CI on GitLab. Instead of `git push`, run:
+
+```bash
+scripts/push-via-gitlab.sh              # GitLab pipeline -> green -> push to GitHub -> watch Actions
+scripts/push-via-gitlab.sh --no-windows # skip the slow Windows job on GitLab
+scripts/push-via-gitlab.sh --gitlab-only
+```
+
+On failure the script prints the failing jobs' logs and does not touch GitHub.
+`.gitlab-ci.yml` mirrors `.github/workflows/ci.yml` job for job (SonarCloud, CodeQL, ZAP,
+Lighthouse and the Docker-based jobs stay GitHub-only); keep the two in sync when changing CI.
+
+### Running checks locally
+
 ```bash
 # Run all tests
 pytest --timeout=60

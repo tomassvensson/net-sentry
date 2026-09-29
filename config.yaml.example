@@ -115,6 +115,19 @@ mdns:
   # Example: ["_http._tcp.local.", "_ssh._tcp.local.", "_airplay._tcp.local."]
   service_types: []
 
+# Watch devices for presence state changes.
+# Notify when a device appears/disappears after being in a stable state.
+# Devices are matched by hostname (case-insensitive substring match).
+#   hostname: the hostname shown in the Name/SSID column of the scan output
+#   name: optional display label for notifications (can be anything you like)
+#   stable_minutes: how long the previous state must have been held (0 = any change)
+presence_watches: []
+  # - hostname: "Mi-10T-Pro.fritz.box"
+  #   name: "Xiaomi Mi 10T Pro"
+  #   stable_minutes: 180
+  #   notify_on_appear: true
+  #   notify_on_disappear: true
+
 monitor_mode:
   interface: "wlan0mon"
   use_docker: true

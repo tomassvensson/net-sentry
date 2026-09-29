@@ -41,6 +41,7 @@ from src.models import Device, VisibilityWindow
 from src.network_discovery import NetworkDevice, discover_subnets_from_routing_table, ping_sweep, scan_arp_table
 from src.oui_lookup import is_multicast_mac, is_randomized_mac
 from src.port_scanner import OpenPort, decode_open_ports, encode_open_ports, scan_host_ports
+from src.presence_monitor import PresenceMonitor
 from src.ssdp_scanner import SsdpDevice
 from src.tracing import setup_tracing
 from src.whitelist import WhitelistManager
@@ -224,6 +225,7 @@ def run_scan(config: AppConfig | None = None, rescan_ports: bool = False) -> Non
 
     whitelist = WhitelistManager(config)
     alert_mgr = AlertManager(config.alert)
+    presence_monitor = PresenceMonitor(config.presence_watches)
 
     # Initialize MQTT if enabled
     mqtt_pub = None
@@ -241,9 +243,11 @@ def run_scan(config: AppConfig | None = None, rescan_ports: bool = False) -> Non
         mqtt_pub.connect()
 
     if config.scan.continuous:
-        _run_continuous_scan(engine, config, whitelist, alert_mgr, mqtt_pub, rescan_ports=rescan_ports)
+        _run_continuous_scan(
+            engine, config, whitelist, alert_mgr, presence_monitor, mqtt_pub, rescan_ports=rescan_ports
+        )
     else:
-        _run_single_scan(engine, config, whitelist, alert_mgr, mqtt_pub, rescan_ports=rescan_ports)
+        _run_single_scan(engine, config, whitelist, alert_mgr, presence_monitor, mqtt_pub, rescan_ports=rescan_ports)
 
     # Cleanup MQTT
     if mqtt_pub is not None:
@@ -255,6 +259,7 @@ def _run_continuous_scan(
     config: AppConfig,
     whitelist: WhitelistManager,
     alert_mgr: AlertManager,
+    presence_monitor: PresenceMonitor,
     mqtt_publisher: object | None,
     rescan_ports: bool = False,
 ) -> None:
@@ -270,7 +275,9 @@ def _run_continuous_scan(
     while not _shutdown_requested:
         scan_number += 1
         logger.info("--- Scan cycle #%d ---", scan_number)
-        _run_single_scan(engine, config, whitelist, alert_mgr, mqtt_publisher, rescan_ports=rescan_ports)
+        _run_single_scan(
+            engine, config, whitelist, alert_mgr, presence_monitor, mqtt_publisher, rescan_ports=rescan_ports
+        )
         rescan_ports = False  # Only force-rescan ports on the first cycle
 
         if _shutdown_requested:
@@ -295,6 +302,7 @@ def _run_single_scan(
     config: AppConfig,
     whitelist: WhitelistManager,
     alert_mgr: AlertManager,
+    presence_monitor: PresenceMonitor,
     mqtt_publisher: object | None = None,
     rescan_ports: bool = False,
 ) -> None:
@@ -305,6 +313,7 @@ def _run_single_scan(
         config: Application configuration.
         whitelist: Whitelist manager.
         alert_mgr: Alert manager.
+        presence_monitor: Presence state change monitor.
         mqtt_publisher: Optional MQTT publisher.
         rescan_ports: When True, force port re-scan even if cached data exists.
     """
@@ -329,6 +338,7 @@ def _run_single_scan(
         )
         _categorize_all_devices(session, whitelist)
         _alert_new_tracked_devices(wifi_results + bt_results, whitelist, alert_mgr)
+        presence_monitor.check(session, gap, datetime.now())
         session.flush()
         _display_results(session, whitelist)
 
